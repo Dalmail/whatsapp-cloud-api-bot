@@ -167,11 +167,11 @@ app.post('/create-order', async (req, res) => {
       order: newOrder,
     });
 
-    //  (Optional)  Send WhatsApp confirmation
+    //  Send WhatsApp confirmation
     const orderSummary = `
 Order Summary:
 Order Number: ${newOrder.orderNumber}
-Total: ${newOrder.total}
+Total: ${total}
 Items:
 ${orderItems.map(item => `- ${item.name} x ${item.quantity}`).join('\n')}
 Status: ${newOrder.status}
