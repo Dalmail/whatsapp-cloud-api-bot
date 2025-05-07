@@ -86,6 +86,36 @@ app.post('/webhook', async (req, res) => {
     await sendMessage(from, '👋 Welcome to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track an order');
     return res.sendStatus(200);
   }
+// Handle user's response to welcome menu
+if (!user.isOrdering && !user.isTracking) {
+  if (msgBody.trim() === '1') {
+    user.isOrdering = true;
+    user.currentOrder = [];
+    user.selectedAddress = null;
+    // Trigger order flow
+    if (user.previousAddresses.length > 0) {
+      let addressMsg = '📍 Choose your address:\n';
+      user.previousAddresses.forEach((addr, i) => {
+        addressMsg += `${i + 1}. ${addr}\n`;
+      });
+      addressMsg += `${user.previousAddresses.length + 1}. Enter a new address`;
+      user.expectingNextStep = 'selectAddress';
+      await sendMessage(from, addressMsg);
+    } else {
+      user.expectingNextStep = 'newAddress';
+      await sendMessage(from, '📍 Please enter your delivery address:');
+    }
+    return res.sendStatus(200);
+  } else if (msgBody.trim() === '2') {
+    user.isTracking = true;
+    user.expectingNextStep = 'trackOrder';
+    await sendMessage(from, '📦 Please enter your Order ID to track your order:');
+    return res.sendStatus(200);
+  } else {
+    await sendMessage(from, '❓ Please reply with:\n1. Place an order\n2. Track an order');
+    return res.sendStatus(200);
+  }
+}
 
   // Step 2: Order Flow
   if (user.isOrdering) {
