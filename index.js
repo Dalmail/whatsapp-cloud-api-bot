@@ -20,9 +20,15 @@ const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/';
 let cachedDb = null;
 const connectToDatabase = async () => {
   if (cachedDb) return cachedDb;
-  const client = await MongoClient.connect(MONGODB_URI);
-  cachedDb = client.db(DB_NAME);
-  return cachedDb;
+  try {
+    const client = await MongoClient.connect(MONGODB_URI);
+    cachedDb = client.db(DB_NAME);
+    console.log('Successfully connected to MongoDB'); // Added logging
+    return cachedDb;
+  } catch (error) {
+    console.error('Error connecting to MongoDB:', error);
+    throw error; // Re-throw the error to prevent further execution
+  }
 };
 
 async function sendMessage(to, message) {
@@ -76,6 +82,7 @@ app.post('/webhook', async (req, res) => {
   }
 
   const state = userState[from];
+  console.log(`Message from ${from}: ${msgBody}, State: ${state.stage}`); // Added logging
 
   if (msgBody === 'hello' || state.stage === 'start') {
     state.stage = 'menu';
@@ -84,7 +91,10 @@ app.post('/webhook', async (req, res) => {
   }
 
   if (msgBody === '1' && state.stage === 'menu') {
+    console.log(`Handling option 1 for ${from}`); // Added logging
     const existingUser = await usersCollection.findOne({ waNumber: from });
+    console.log('Existing user:', existingUser); // Added logging
+
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
       state.stage = 'collect_address';
       await sendMessage(from, '📍 Please share your address to proceed with your order.');
@@ -107,10 +117,17 @@ app.post('/webhook', async (req, res) => {
         },
       ],
     };
-    await usersCollection.insertOne(newUserData);
-    state.stage = 'done';
-    await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}`);
-    return res.sendStatus(200);
+    console.log('Saving new user data:', newUserData); // Added logging
+    try {
+      await usersCollection.insertOne(newUserData);
+      state.stage = 'done';
+      await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}`);
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Error inserting user data:', error);
+      await sendMessage(from, '⚠️ There was an error saving your address. Please try again.');
+      return res.sendStatus(500); // Or some other appropriate error status
+    }
   }
 
   res.sendStatus(200);
