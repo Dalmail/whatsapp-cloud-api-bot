@@ -14,8 +14,8 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 const DB_NAME = 'daalMail';
-const USERS_COLLECTION = 'users';
 const COLLECTION_NAME = 'orders';
+const USERS_COLLECTION = 'users';
 
 let cachedDb = null;
 const connectToDatabase = async () => {
@@ -37,7 +37,13 @@ const menu = [
   { id: 6, name: 'Bread', price: 20, imageUrl },
 ];
 
+function getItemIdFromName(itemName) {
+  const item = menu.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+  return item ? item.id : null;
+}
+
 async function sendMessage(to, message) {
+  console.log(`📤 Sending message to ${to}: ${message}`);
   await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
     messaging_product: 'whatsapp',
     to,
@@ -62,158 +68,123 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  const entry = req.body.entry?.[0];
-  const changes = entry?.changes?.[0];
-  const message = changes?.value?.messages?.[0];
+  try {
+    console.log('📩 Incoming message:', JSON.stringify(req.body, null, 2));
 
-  if (!message) return res.sendStatus(200);
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const message = changes?.value?.messages?.[0];
 
-  const from = message.from;
-  const msgBody = message.text?.body || '';
+    if (!message) return res.sendStatus(200);
 
-  const db = await connectToDatabase();
-  const usersCollection = db.collection(USERS_COLLECTION);
+    const from = message.from;
+    const msgBody = message.text?.body?.trim() || '';
+    const type = message.type;
 
-  let user = userState[from] || { started: false, isOrdering: false, isTracking: false, currentOrder: [], expectingNextStep: null, menuShown: false, previousAddresses: [] };
-  userState[from] = user;
+    console.log(`👤 Message from ${from}: ${msgBody}`);
 
-  const existingUser = await usersCollection.findOne({ waNumber: from });
-  if (existingUser?.previousAddresses) user.previousAddresses = existingUser.previousAddresses;
+    const db = await connectToDatabase();
+    const usersCollection = db.collection(USERS_COLLECTION);
+    const ordersCollection = db.collection(COLLECTION_NAME);
 
-  // Step 1: Greeting and Main Menu
-  if (!user.started) {
-    user.started = true;
-    await sendMessage(from, '👋 Welcome to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track an order');
-    return res.sendStatus(200);
-  }
-// Handle user's response to welcome menu
-if (!user.isOrdering && !user.isTracking) {
-  if (msgBody.trim() === '1') {
-    user.isOrdering = true;
-    user.currentOrder = [];
-    user.selectedAddress = null;
-    // Trigger order flow
-    if (user.previousAddresses.length > 0) {
-      let addressMsg = '📍 Choose your address:\n';
-      user.previousAddresses.forEach((addr, i) => {
-        addressMsg += `${i + 1}. ${addr}\n`;
-      });
-      addressMsg += `${user.previousAddresses.length + 1}. Enter a new address`;
-      user.expectingNextStep = 'selectAddress';
-      await sendMessage(from, addressMsg);
-    } else {
-      user.expectingNextStep = 'newAddress';
-      await sendMessage(from, '📍 Please enter your delivery address:');
+    let user = userState[from] || {
+      started: false,
+      isOrdering: false,
+      isTracking: false,
+      expectingNextStep: null,
+      menuShown: false,
+      currentOrder: [],
+      previousAddresses: [],
+    };
+    userState[from] = user;
+
+    const existingUser = await usersCollection.findOne({ waNumber: from });
+    if (existingUser?.previousAddresses) user.previousAddresses = existingUser.previousAddresses;
+
+    // Step 1: Greet and ask what user wants to do
+    if (!user.started) {
+      user.started = true;
+      await sendMessage(from, '👋 Welcome to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track an order');
+      return res.sendStatus(200);
     }
-    return res.sendStatus(200);
-  } else if (msgBody.trim() === '2') {
-    user.isTracking = true;
-    user.expectingNextStep = 'trackOrder';
-    await sendMessage(from, '📦 Please enter your Order ID to track your order:');
-    return res.sendStatus(200);
-  } else {
-    await sendMessage(from, '❓ Please reply with:\n1. Place an order\n2. Track an order');
-    return res.sendStatus(200);
-  }
-}
 
-  // Step 2: Order Flow
-  if (user.isOrdering) {
-    if (user.currentOrder.length === 0) {
+    // Step 2: Handle main menu choices
+    if (msgBody === '1') {
+      user.isOrdering = true;
+      user.isTracking = false;
+
       if (user.previousAddresses.length > 0) {
-        let addressMsg = '📍 Choose your address:\n';
-        user.previousAddresses.forEach((addr, i) => {
-          addressMsg += `${i + 1}. ${addr}\n`;
-        });
-        addressMsg += `${user.previousAddresses.length + 1}. Enter a new address`;
-        user.expectingNextStep = 'selectAddress';
-        await sendMessage(from, addressMsg);
+        let addressList = user.previousAddresses.map((addr, i) => `${i + 1}. ${addr}`).join('\n');
+        await sendMessage(from, `📍 We found your previous addresses:\n${addressList}\n${user.previousAddresses.length + 1}. Use a new address`);
+        user.expectingNextStep = 'choose_address';
       } else {
-        await sendMessage(from, '📍 Please enter your delivery address:');
-        user.expectingNextStep = 'newAddress';
+        await sendMessage(from, '📍 Please share your location to place the order.');
+        user.expectingNextStep = 'get_location';
       }
       return res.sendStatus(200);
     }
 
-    if (user.currentOrder.length > 0 && user.selectedAddress) {
-      const orderId = `DM${Date.now()}`;
-      const orderSummary = user.currentOrder.map(i => `${i.name} - ₹${i.price}`).join('\n');
-      const total = user.currentOrder.reduce((sum, i) => sum + i.price, 0);
-
-      await db.collection(COLLECTION_NAME).insertOne({
-        orderId,
-        waNumber: from,
-        items: user.currentOrder,
-        address: user.selectedAddress,
-        status: 'Preparing',
-        createdAt: new Date(),
-      });
-
-      await sendMessage(from, `✅ Order placed!\n\n🧾 Order ID: ${orderId}\n${orderSummary}\n📍 Delivery to: ${user.selectedAddress}\n💰 Total: ₹${total}\n\nYou can track your order anytime by replying with "2".`);
-
-      userState[from] = {
-        started: true,
-        isOrdering: false,
-        isTracking: false,
-        currentOrder: [],
-        expectingNextStep: null,
-        menuShown: false,
-        previousAddresses: user.previousAddresses,
-      };
+    if (user.expectingNextStep === 'choose_address') {
+      const choice = parseInt(msgBody);
+      if (choice >= 1 && choice <= user.previousAddresses.length) {
+        user.address = user.previousAddresses[choice - 1];
+        await sendMessage(from, '📋 Here is our menu:\n' + menu.map(item => `${item.id}. ${item.name} - ₹${item.price}`).join('\n'));
+        user.expectingNextStep = 'order_items';
+      } else if (choice === user.previousAddresses.length + 1) {
+        await sendMessage(from, '📍 Please share your new location.');
+        user.expectingNextStep = 'get_location';
+      } else {
+        await sendMessage(from, '❌ Invalid choice. Please select from the given options.');
+      }
       return res.sendStatus(200);
     }
-  }
 
-  // Step 3: Address Selection
-  if (user.expectingNextStep === 'selectAddress') {
-    const choice = parseInt(msgBody.trim());
-    if (!isNaN(choice) && choice >= 1 && choice <= user.previousAddresses.length) {
-      user.selectedAddress = user.previousAddresses[choice - 1];
-      await sendMessage(from, '📍 Address selected! Now, please share your location:');
-      user.expectingNextStep = 'getLocation';
-    } else if (choice === user.previousAddresses.length + 1) {
-      await sendMessage(from, '📍 Please enter your new delivery address:');
-      user.expectingNextStep = 'newAddress';
-    } else {
-      await sendMessage(from, '⚠️ Invalid choice. Please reply with a valid number.');
+    if (user.expectingNextStep === 'get_location') {
+      if (message.location) {
+        const address = `Lat: ${message.location.latitude}, Lon: ${message.location.longitude}`;
+        user.address = address;
+        user.previousAddresses.push(address);
+        await usersCollection.updateOne(
+          { waNumber: from },
+          { $set: { waNumber: from }, $addToSet: { previousAddresses: address } },
+          { upsert: true }
+        );
+        await sendMessage(from, '✅ Location saved!\nHere is our menu:\n' + menu.map(item => `${item.id}. ${item.name} - ₹${item.price}`).join('\n'));
+        user.expectingNextStep = 'order_items';
+      } else {
+        await sendMessage(from, '📍 Please share your location using WhatsApp location feature.');
+      }
+      return res.sendStatus(200);
     }
-    return res.sendStatus(200);
-  }
 
-  // Step 4: New Address Input
-  if (user.expectingNextStep === 'newAddress') {
-    user.selectedAddress = msgBody.trim();
-    if (!user.previousAddresses.includes(user.selectedAddress)) {
-      user.previousAddresses.push(user.selectedAddress);
-      await usersCollection.updateOne(
-        { waNumber: from },
-        { $set: { waNumber: from, previousAddresses: user.previousAddresses } },
-        { upsert: true }
-      );
+    if (user.expectingNextStep === 'order_items') {
+      const itemId = parseInt(msgBody);
+      const item = menu.find(i => i.id === itemId);
+      if (item) {
+        user.currentOrder.push(item);
+        await sendMessage(from, `🛒 Added ${item.name} to your cart.\nType another item number to add more or type "done" to finish.`);
+      } else if (msgBody.toLowerCase() === 'done') {
+        if (user.currentOrder.length === 0) {
+          await sendMessage(from, '❗ Your cart is empty. Please select at least one item.');
+        } else {
+          const total = user.currentOrder.reduce((sum, i) => sum + i.price, 0);
+          await ordersCollection.insertOne({ waNumber: from, items: user.currentOrder, address: user.address, createdAt: new Date() });
+          await sendMessage(from, `✅ Order placed!\nTotal: ₹${total}\nDelivery to: ${user.address}`);
+          user.currentOrder = [];
+          user.expectingNextStep = null;
+        }
+      } else {
+        await sendMessage(from, '❌ Invalid input. Please type an item number or "done".');
+      }
+      return res.sendStatus(200);
     }
-    await sendMessage(from, '📍 Address saved! Now, please share your location:');
-    user.expectingNextStep = 'getLocation';
-    return res.sendStatus(200);
-  }
 
-  // Step 5: Location Collection
-  if (user.expectingNextStep === 'getLocation') {
-    user.location = msgBody.trim();
-    await sendMessage(from, '📋 Here\'s our menu:\n' + menu.map(item => `${item.id}. ${item.name} - ₹${item.price}`).join('\n') + '\n\nReply with item names (e.g., "Dal, Rice")');
-    user.menuShown = true;
-    user.expectingNextStep = null;
+    await sendMessage(from, '❓ I didn\'t understand that. Please type "1" to place an order or "2" to track.');
     return res.sendStatus(200);
+  } catch (error) {
+    console.error('❌ Error in webhook handler:', error);
+    return res.sendStatus(500);
   }
-
-  // Step 6: Track Order Flow
-  if (msgBody.trim() === '2') {
-    user.isTracking = true;
-    await sendMessage(from, '📍 Please enter your Order ID to track your order:');
-    user.expectingNextStep = 'trackOrder';
-    return res.sendStatus(200);
-  }
-
-  return res.sendStatus(200);
 });
 
 const PORT = process.env.PORT || 3000;
