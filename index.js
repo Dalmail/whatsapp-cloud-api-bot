@@ -85,18 +85,29 @@ app.post('/webhook', async (req, res) => {
 
   if (msgBody === '1' && state.stage === 'menu') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
-    if (!existingUser) {
+    if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
       state.stage = 'collect_address';
       await sendMessage(from, '📍 Please share your address to proceed with your order.');
     } else {
-      await sendMessage(from, `📦 We found your previous address:\n${existingUser.address}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}`);
+      const prevAddr = existingUser.previousAddresses[0].address;
+      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}`);
+      state.stage = 'done';
     }
     return res.sendStatus(200);
   }
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
-    await usersCollection.insertOne({ waNumber: from, address });
+    const newUserData = {
+      waNumber: from,
+      previousAddresses: [
+        {
+          address,
+          location: null, // You can collect and update location separately later
+        },
+      ],
+    };
+    await usersCollection.insertOne(newUserData);
     state.stage = 'done';
     await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}`);
     return res.sendStatus(200);
