@@ -1,52 +1,83 @@
 const express = require('express');
-const venom = require('venom-bot');
 const mongoose = require('mongoose');
-const { MongoClient } = require('mongodb');
+const axios = require('axios');
 require('dotenv').config();
 
-// Initialize express app
 const app = express();
 app.use(express.json());
 
-// MongoDB connection URI and database name
+// MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'daalMail';
-const COLLECTION_NAME = 'orders';
-const USERS_COLLECTION = 'users';
-
-// Initialize Venom-bot
-venom
-  .create({ session: 'cloud-kitchen-session', multidevice: true, headless: false })
-  .then((client) => {
-    console.log('WhatsApp bot is ready');
-    start(client);
-  })
-  .catch((error) => {
-    console.log('Error initializing bot:', error);
-  });
-
-// Connect to MongoDB
-let cachedDb = null;
-const connectToDatabase = async () => {
-  if (cachedDb) return cachedDb;
-  const client = await MongoClient.connect(MONGODB_URI);
-  cachedDb = client.db(DB_NAME);
-  return cachedDb;
-};
-
-// Express endpoint to check if the server is running
-app.get('/', (req, res) => {
-  res.send('Cloud Kitchen WhatsApp Bot is running');
+mongoose.connect(MONGODB_URI, {
+  dbName: DB_NAME,
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+mongoose.connection.once('open', () => {
+  console.log('Connected to MongoDB');
 });
 
-// Start server
+// Webhook verification
+app.get('/webhook', (req, res) => {
+  const verify_token = process.env.VERIFY_TOKEN;
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token) {
+    if (mode === 'subscribe' && token === verify_token) {
+      console.log('Webhook verified!');
+      return res.status(200).send(challenge);
+    } else {
+      return res.sendStatus(403);
+    }
+  }
+});
+
+// Webhook for receiving messages
+app.post('/webhook', async (req, res) => {
+  const body = req.body;
+
+  if (body.object) {
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const message = changes?.value?.messages?.[0];
+
+    if (message) {
+      const phone_number_id = changes.value.metadata.phone_number_id;
+      const from = message.from;
+      const text = message.text?.body;
+
+      // Echo back the same message
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: from,
+          text: { body: `You said: ${text}` },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    }
+
+    return res.sendStatus(200);
+  }
+
+  res.sendStatus(404);
+});
+
+// Health check
+app.get('/', (req, res) => {
+  res.send('DaalMail WhatsApp Cloud API Bot is running');
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
-
-// Handle message interactions with the WhatsApp bot
-function start(client) {
-  // Your messageHandler.js code goes here to handle user interactions with the bot
-  require('./messageHandler')(client);
-}
