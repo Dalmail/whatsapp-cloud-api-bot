@@ -23,7 +23,7 @@ const connectToDatabase = async () => {
   try {
     const client = await MongoClient.connect(MONGODB_URI);
     cachedDb = client.db(DB_NAME);
-    console.log('Successfully connected to MongoDB'); // Added logging
+    console.log('Successfully connected to MongoDB');
     return cachedDb;
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);
@@ -82,7 +82,7 @@ app.post('/webhook', async (req, res) => {
   }
 
   const state = userState[from];
-  console.log(`Message from ${from}: ${msgBody}, State: ${state.stage}`); // Added logging
+  console.log(`Message from ${from}: ${msgBody}, State: ${state.stage}`);
 
   if (msgBody === 'hello' || state.stage === 'start') {
     state.stage = 'menu';
@@ -91,16 +91,16 @@ app.post('/webhook', async (req, res) => {
   }
 
   if (msgBody === '1' && state.stage === 'menu') {
-    console.log(`Handling option 1 for ${from}`); // Added logging
+    console.log(`Handling option 1 for ${from}`);
     const existingUser = await usersCollection.findOne({ waNumber: from });
-    console.log('Existing user:', existingUser); // Added logging
+    console.log('Existing user:', existingUser);
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
       state.stage = 'collect_address';
       await sendMessage(from, '📍 Please share your address to proceed with your order.');
     } else {
       const prevAddr = existingUser.previousAddresses[0].address;
-      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}`);
+      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber
       state.stage = 'done';
     }
     return res.sendStatus(200);
@@ -113,11 +113,11 @@ app.post('/webhook', async (req, res) => {
       previousAddresses: [
         {
           address,
-          location: null, // You can collect and update location separately later
+          location: null,
         },
       ],
     };
-    console.log('Saving new user data:', newUserData); // Added logging
+    console.log('Saving new user data:', newUserData);
     try {
       await usersCollection.insertOne(newUserData);
       state.stage = 'done';
@@ -126,11 +126,63 @@ app.post('/webhook', async (req, res) => {
     } catch (error) {
       console.error('Error inserting user data:', error);
       await sendMessage(from, '⚠️ There was an error saving your address. Please try again.');
-      return res.sendStatus(500); // Or some other appropriate error status
+      return res.sendStatus(500);
     }
   }
 
   res.sendStatus(200);
+});
+
+// New route to handle order creation from Netlify
+app.post('/create-order', async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const ordersCollection = db.collection('orders');
+    const usersCollection = db.collection('users');
+
+    const { orderItems, total, waNumber } = req.body;
+
+    if (!waNumber) {
+      return res.status(400).json({ error: 'WhatsApp number is required' });
+    }
+
+    const user = await usersCollection.findOne({ waNumber });
+    if (!user) {
+      return res.status(400).json({ error: 'WhatsApp number not found. Please go back to WhatsApp and try again.' });
+    }
+
+    const newOrder = {
+      waNumber,
+      orderItems,
+      total,
+      status: 'notified',
+      orderTime: new Date(),
+      orderNumber: `DM${Math.floor(Math.random() * 1000000)}`,
+    };
+
+    const result = await ordersCollection.insertOne(newOrder);
+
+    res.status(201).json({
+      message: 'Order created successfully',
+      order: newOrder,
+    });
+
+    //  (Optional)  Send WhatsApp confirmation
+    const orderSummary = `
+Order Summary:
+Order Number: ${newOrder.orderNumber}
+Total: ${newOrder.total}
+Items:
+${orderItems.map(item => `- ${item.name} x ${item.quantity}`).join('\n')}
+Status: ${newOrder.status}
+    `;
+    await sendMessage(waNumber, `Your order has been placed!\n${orderSummary}`);
+
+
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({ error: 'Failed to create order: ' + error.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
