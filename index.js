@@ -135,7 +135,7 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'done';
       console.log(`POST /webhook: Selected address: ${selectedAddress} for ${from}`);
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
-      await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`); // show menu
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
     } else if (choice === state.addresses.length + 1) {
       userState[from] = { stage: 'collect_address', addresses: state.addresses };
       await sendMessage(from, '📍 Please enter your new address:');
@@ -159,13 +159,13 @@ app.post('/webhook', async (req, res) => {
     state.stage = 'done';
     console.log(`POST /webhook: New address saved: ${address} for ${from}`);
     await sendMessage(from, `✅ Address saved: ${address}`);
-    await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`); //show menu link
+    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
     return res.sendStatus(200);
   }
 
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-     await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`);
+     await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
      return res.sendStatus(200);
   }
 
