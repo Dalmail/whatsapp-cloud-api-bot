@@ -14,8 +14,8 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 const DB_NAME = 'daalMail';
 const USERS_COLLECTION = 'users';
-const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/'; // Corrected variable name
-
+const ORDERS_COLLECTION = 'orders';
+const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/';
 let cachedDb = null;
 const connectToDatabase = async () => {
   if (cachedDb) {
@@ -79,7 +79,7 @@ app.post('/webhook', async (req, res) => {
   const entry = req.body.entry?.[0];
   const changes = entry?.changes?.[0];
   const message = changes?.value?.messages?.[0];
-  const location = message?.location; // Get the location
+  const location = message?.location;
 
   if (!message) {
     console.log("POST /webhook: No message found in payload");
@@ -88,9 +88,10 @@ app.post('/webhook', async (req, res) => {
 
   const from = message.from;
   const msgBody = message.text?.body?.trim().toLowerCase() || '';
-  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, location: ${JSON.stringify(location)}`); // Include location in log
+  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, location: ${JSON.stringify(location)}`);
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
+  const ordersCollection = db.collection(ORDERS_COLLECTION);
 
   if (!userState[from]) {
     userState[from] = { stage: 'start' };
@@ -102,11 +103,11 @@ app.post('/webhook', async (req, res) => {
   if (msgBody === 'hello' || state.stage === 'start') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
     if (!existingUser) {
-      state.stage = 'collect_location'; // First-time user flow
+      state.stage = 'collect_location';
       await sendMessage(from, "👋 Welcome to Daal Mail!\n\nPlease share your location to continue with your order.");
     } else {
-      state.stage = 'menu'; //returning user
-      await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:\n1. Place an order');
+      state.stage = 'menu';
+      await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track your order');
     }
     return res.sendStatus(200);
   }
@@ -127,7 +128,7 @@ app.post('/webhook', async (req, res) => {
     const existingUser = await usersCollection.findOne({ waNumber: from });
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
-      state.stage = 'collect_location'; //collect location first for new user
+      state.stage = 'collect_location';
       await sendMessage(from, '📍 No previous address found. Please share your location to continue with your order:');
     } else {
       const addresses = existingUser.previousAddresses;
@@ -143,6 +144,38 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
+  if (msgBody === '2' && state.stage === 'menu') {
+    state.stage = 'track_order';
+    const userOrders = await ordersCollection.find({ waNumber: from }).toArray(); //get all orders
+    if (userOrders.length > 0) {
+      let orderListMessage = "📦 Your Previous Orders:\n";
+      userOrders.forEach((order, index) => {
+        orderListMessage += `${index + 1}. Order Number: ${order.orderNumber}, Status: ${order.status}, Order Time: ${order.orderTime}\n`;
+      });
+      orderListMessage += "\n Please enter the *number* of the order you want to track:";
+      state.orders = userOrders; //save orders
+      await sendMessage(from, orderListMessage);
+    }
+     else{
+       await sendMessage(from, "❌ No previous orders found.");
+       state.stage = 'done';
+     }
+    return res.sendStatus(200);
+  }
+
+  if (state.stage === 'track_order' && state.orders) {
+    const orderNumberChoice = parseInt(msgBody);
+    if (!isNaN(orderNumberChoice) && orderNumberChoice > 0 && orderNumberChoice <= state.orders.length) {
+      const selectedOrder = state.orders[orderNumberChoice - 1];
+      await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
+    }
+     else {
+      await sendMessage(from, "❌ Invalid order number. Please enter a valid number from the list.");
+    }
+    state.stage = 'done';
+    return res.sendStatus(200);
+  }
+
   if (state.stage === 'choose_address') {
     const choice = parseInt(msgBody);
 
@@ -151,9 +184,9 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'done';
       console.log(`POST /webhook: Selected address: ${selectedAddress} for ${from}`);
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
-      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
     } else if (choice === state.addresses.length + 1) {
-      state.stage = 'collect_location'; // collect location before address
+      state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
@@ -163,29 +196,28 @@ app.post('/webhook', async (req, res) => {
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
-     if(state.userLocation){
-        const existingUser = await usersCollection.findOne({ waNumber: from });
-        const newEntry = { address, location: state.userLocation, timestamp: new Date() }; // Include the location
-        if (existingUser) {
-          await usersCollection.updateOne({ waNumber: from }, { $push: { previousAddresses: newEntry } });
-        } else {
-          const newUser = {
-            waNumber: from,
-            previousAddresses: [newEntry],
-          }
-          await usersCollection.insertOne(newUser);
-        }
-        state.stage = 'done';
-        console.log(`POST /webhook: New address saved: ${address} for ${from}`);
-        await sendMessage(from, `✅ Address saved: ${address}`);
-        await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
-        return res.sendStatus(200);
-     }
-     else{
-        await sendMessage(from, "❌ Location is required. Please share your location and address again.");
-        state.stage = 'collect_location';
-        return res.sendStatus(200);
-     }
+    if (state.userLocation) {
+      const existingUser = await usersCollection.findOne({ waNumber: from });
+      const newEntry = { address, location: state.userLocation, timestamp: new Date() };
+      if (existingUser) {
+        await usersCollection.updateOne({ waNumber: from }, { $push: { previousAddresses: newEntry } });
+      } else {
+        const newUser = {
+          waNumber: from,
+          previousAddresses: [newEntry],
+        };
+        await usersCollection.insertOne(newUser);
+      }
+      state.stage = 'done';
+      console.log(`POST /webhook: New address saved: ${address} for ${from}`);
+      await sendMessage(from, `✅ Address saved: ${address}`);
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+      return res.sendStatus(200);
+    } else {
+      await sendMessage(from, "❌ Location is required. Please share your location and address again.");
+      state.stage = 'collect_location';
+      return res.sendStatus(200);
+    }
   }
 
   if (state.stage === 'done') {
@@ -210,14 +242,14 @@ app.post('/create-order', async (req, res) => {
 
     if (!waNumber) {
       console.log("POST /create-order: WhatsApp number is missing");
-      return res.status(400).json({ error: 'WhatsApp number is required. Please provide it in the request body.' }); // Changed error message
+      return res.status(400).json({ error: 'WhatsApp number is required. Please provide it in the request body.' });
     }
 
     const user = await usersCollection.findOne({ waNumber });
     console.log("POST /create-order: User found:", user);
     if (!user) {
       console.log("POST /create-order: WhatsApp number not found in database");
-      return res.status(400).json({ error: 'WhatsApp number not found.  Please go back to WhatsApp and try again.' }); // Changed error
+      return res.status(400).json({ error: 'WhatsApp number not found.  Please go back to WhatsApp and try again.' });
     }
 
     const newOrder = {
