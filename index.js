@@ -1,4 +1,3 @@
-// index.js
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
@@ -52,7 +51,7 @@ async function sendMessage(to, message) {
         },
       }
     );
-    console.log(`sendMessage: successful`);
+    console.log('sendMessage: successful');
   } catch (err) {
     console.error('sendMessage: Error sending message:', err.response?.data || err.message);
   }
@@ -106,49 +105,24 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-    if (msgBody === '1' && state.stage === 'menu') {
+  if (msgBody === '1' && state.stage === 'menu') {
     console.log(`POST /webhook: Handling option 1 for ${from}, stage is menu`);
     const existingUser = await usersCollection.findOne({ waNumber: from });
     console.log('POST /webhook: Existing user:', existingUser);
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
       state.stage = 'collect_address';
+      console.log(`POST /webhook: Setting stage to 'collect_address' for ${from}`);
       await sendMessage(from, '📍 Please share your address to proceed with your order.');
     } else {
-      state.stage = 'choose_address';
-      state.addressOptions = existingUser.previousAddresses;
-      let message = '📦 We found your previous addresses:\n';
-      existingUser.previousAddresses.forEach((item, index) => {
-        message += `${index + 1}. ${item.address}\n`;
-      });
-      message += `${existingUser.previousAddresses.length + 1}. Enter a new address`;
-      message += `\n\nPlease reply with a number to select one.`;
-      await sendMessage(from, message);
-    }
-    return res.sendStatus(200);
-  }
-
-  if (state.stage === 'choose_address') {
-    const choice = parseInt(msgBody);
-    const options = state.addressOptions || [];
-
-    if (isNaN(choice) || choice < 1 || choice > options.length + 1) {
-      await sendMessage(from, '❌ Invalid option. Please choose a valid number from the list.');
-      return res.sendStatus(200);
-    }
-
-    if (choice === options.length + 1) {
-      // User chose to enter new address
-      state.stage = 'collect_address';
-      await sendMessage(from, '📍 Please enter your new address:');
-    } else {
-      const selectedAddress = options[choice - 1].address;
+      const prevAddr = existingUser.previousAddresses[0].address;
+      console.log(`POST /webhook: Found previous address for ${from}: ${prevAddr}`);
+      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber
       state.stage = 'done';
-      await sendMessage(from, `✅ Selected address: ${selectedAddress}\n\nYou can now order from the menu here:\n${NETLIFY_MENU_LINK}?waNumber=${from}`);
+      console.log(`POST /webhook: Setting stage to 'done' for ${from}`);
     }
     return res.sendStatus(200);
   }
-
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
@@ -167,7 +141,7 @@ app.post('/webhook', async (req, res) => {
       await usersCollection.insertOne(newUserData);
       state.stage = 'done';
       console.log(`POST /webhook: Address saved for ${from}, setting stage to done`);
-      await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}`);
+      await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}?waNumber=${from}`);
       return res.sendStatus(200);
     } catch (error) {
       console.error('POST /webhook: Error inserting user data:', error);
@@ -221,8 +195,8 @@ app.post('/create-order', async (req, res) => {
 
     //  Send WhatsApp confirmation
     console.log("POST /create-order: Order data before sending message:", { newOrder, waNumber, orderItems, total });
-    const orderSummary = `
-Order Summary:
+    const orderSummary = 
+`Order Summary:
 Order Number: ${newOrder.orderNumber}
 Total: ${total}
 Items:
@@ -237,8 +211,6 @@ Status: ${newOrder.status}
       console.error("POST /create-order: Error sending message from create-order", e);
     }
     console.log("POST /create-order: Exiting /create-order route");
-
-
   } catch (error) {
     console.error('POST /create-order: Error creating order:', error);
     res.status(500).json({ error: 'Failed to create order: ' + error.message });
