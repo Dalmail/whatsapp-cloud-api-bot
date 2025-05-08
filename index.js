@@ -14,7 +14,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 const DB_NAME = 'daalMail';
 const USERS_COLLECTION = 'users';
-const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/';
+const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/'; // Corrected variable name
 
 let cachedDb = null;
 const connectToDatabase = async () => {
@@ -106,48 +106,67 @@ app.post('/webhook', async (req, res) => {
   }
 
   if (msgBody === '1' && state.stage === 'menu') {
-    console.log(`POST /webhook: Handling option 1 for ${from}, stage is menu`);
     const existingUser = await usersCollection.findOne({ waNumber: from });
-    console.log('POST /webhook: Existing user:', existingUser);
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
-      state.stage = 'collect_address';
-      console.log(`POST /webhook: Setting stage to 'collect_address' for ${from}`);
-      await sendMessage(from, '📍 Please share your address to proceed with your order.');
+      userState[from] = { stage: 'collect_address' };
+      await sendMessage(from, '📍 No previous address found. Please enter your address to continue:');
     } else {
-      const prevAddr = existingUser.previousAddresses[0].address;
-      console.log(`POST /webhook: Found previous address for ${from}: ${prevAddr}`);
-      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber
+      const addresses = existingUser.previousAddresses;
+      let msg = '📍 We found your previous addresses:\n\n';
+      addresses.forEach((item, index) => {
+        msg += `${index + 1}. ${item.address}\n`;
+      });
+      msg += `${addresses.length + 1}. ➕ Add a new address\n\nPlease reply with the number of your choice.`;
+      userState[from] = {
+        stage: 'choose_address',
+        addresses,
+      };
+      await sendMessage(from, msg);
+    }
+    return res.sendStatus(200);
+  }
+
+  if (state.stage === 'choose_address') {
+    const choice = parseInt(msgBody);
+
+    if (!isNaN(choice) && choice >= 1 && choice <= state.addresses.length) {
+      const selectedAddress = state.addresses[choice - 1].address;
       state.stage = 'done';
-      console.log(`POST /webhook: Setting stage to 'done' for ${from}`);
+      console.log(`POST /webhook: Selected address: ${selectedAddress} for ${from}`);
+      await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
+      await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`); // show menu
+    } else if (choice === state.addresses.length + 1) {
+      userState[from] = { stage: 'collect_address', addresses: state.addresses };
+      await sendMessage(from, '📍 Please enter your new address:');
+    } else {
+      await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
     }
     return res.sendStatus(200);
   }
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
-    console.log(`POST /webhook: Collecting address: ${address} for ${from}`);
-    const newUserData = {
-      waNumber: from,
-      previousAddresses: [
-        {
-          address,
-          location: null,
-        },
-      ],
-    };
-    console.log('POST /webhook: Saving new user data:', newUserData);
-    try {
-      await usersCollection.insertOne(newUserData);
-      state.stage = 'done';
-      console.log(`POST /webhook: Address saved for ${from}, setting stage to done`);
-      await sendMessage(from, `✅ Address saved!\n\nNow you can order from our menu here: ${NETLIFY_MENU_LINK}?waNumber=${from}`);
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('POST /webhook: Error inserting user data:', error);
-      await sendMessage(from, '⚠️ There was an error saving your address. Please try again.');
-      return res.sendStatus(500);
+    const existingUser = await usersCollection.findOne({ waNumber: from });
+    const newEntry = { address, timestamp: new Date() };
+
+    if (existingUser) {
+      await usersCollection.updateOne({ waNumber: from }, { $push: { previousAddresses: newEntry } });
+    } else {
+      await usersCollection.insertOne({ waNumber: from, previousAddresses: [newEntry] });
     }
+
+    state.stage = 'done';
+    console.log(`POST /webhook: New address saved: ${address} for ${from}`);
+    await sendMessage(from, `✅ Address saved: ${address}`);
+    await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`); //show menu link
+    return res.sendStatus(200);
+  }
+
+  if (state.stage === 'done') {
+    console.log(`POST /webhook: stage is done.  ${from}`);
+     await sendMessage(from, `🛒 Here's the menu link: ${NETLIFY_MENU_LINK}`);
+     return res.sendStatus(200);
   }
 
   res.sendStatus(200);
@@ -166,14 +185,14 @@ app.post('/create-order', async (req, res) => {
 
     if (!waNumber) {
       console.log("POST /create-order: WhatsApp number is missing");
-      return res.status(400).json({ error: 'WhatsApp number is required' });
+      return res.status(400).json({ error: 'WhatsApp number is required. Please provide it in the request body.' }); // Changed error message
     }
 
     const user = await usersCollection.findOne({ waNumber });
     console.log("POST /create-order: User found:", user);
     if (!user) {
       console.log("POST /create-order: WhatsApp number not found in database");
-      return res.status(400).json({ error: 'WhatsApp number not found. Please go back to WhatsApp and try again.' });
+      return res.status(400).json({ error: 'WhatsApp number not found.  Please go back to WhatsApp and try again.' }); // Changed error
     }
 
     const newOrder = {
@@ -195,8 +214,8 @@ app.post('/create-order', async (req, res) => {
 
     //  Send WhatsApp confirmation
     console.log("POST /create-order: Order data before sending message:", { newOrder, waNumber, orderItems, total });
-    const orderSummary = 
-`Order Summary:
+    const orderSummary = `
+Order Summary:
 Order Number: ${newOrder.orderNumber}
 Total: ${total}
 Items:
