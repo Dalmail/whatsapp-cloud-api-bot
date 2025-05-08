@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-require('dotenv').config();
+require('dotenv().config();
 
 const app = express();
 app.use(bodyParser.json());
@@ -30,7 +30,7 @@ const connectToDatabase = async () => {
     return cachedDb;
   } catch (error) {
     console.error('connectToDatabase: Error connecting to MongoDB:', error);
-    throw error; // Re-throw the error to prevent further execution
+    throw error;
   }
 };
 
@@ -53,7 +53,7 @@ async function sendMessage(to, message) {
     );
     console.log('sendMessage: successful');
   } catch (err) {
-    console.error('sendMessage: Error sending message:', err.response?.data || err.message);
+    console.error('Error sending message:', err.response?.data || err.message);
   }
 }
 
@@ -146,20 +146,22 @@ app.post('/webhook', async (req, res) => {
 
   if (msgBody === '2' && state.stage === 'menu') {
     state.stage = 'track_order';
-    const userOrders = await ordersCollection.find({ waNumber: from }).toArray(); //get all orders
+    const waNumberForQuery = from.startsWith('+') ? from : `+${from}`;  // Add '+' if missing
+    console.log(`POST /webhook: Tracking orders for waNumber: ${waNumberForQuery}`); // Log the from number
+    const userOrders = await ordersCollection.find({ waNumber: waNumberForQuery }).toArray();
+    console.log(`POST /webhook: Orders found for ${waNumberForQuery}:`, userOrders); // Log the orders
     if (userOrders.length > 0) {
       let orderListMessage = "📦 Your Previous Orders:\n";
       userOrders.forEach((order, index) => {
         orderListMessage += `${index + 1}. Order Number: ${order.orderNumber}, Status: ${order.status}, Order Time: ${order.orderTime}\n`;
       });
       orderListMessage += "\n Please enter the *number* of the order you want to track:";
-      state.orders = userOrders; //save orders
+      state.orders = userOrders;
       await sendMessage(from, orderListMessage);
+    } else {
+      await sendMessage(from, "❌ No previous orders found.");
+      state.stage = 'done';
     }
-     else{
-       await sendMessage(from, "❌ No previous orders found.");
-       state.stage = 'done';
-     }
     return res.sendStatus(200);
   }
 
@@ -168,8 +170,7 @@ app.post('/webhook', async (req, res) => {
     if (!isNaN(orderNumberChoice) && orderNumberChoice > 0 && orderNumberChoice <= state.orders.length) {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
-    }
-     else {
+    } else {
       await sendMessage(from, "❌ Invalid order number. Please enter a valid number from the list.");
     }
     state.stage = 'done';
@@ -295,3 +296,4 @@ Status: ${newOrder.status}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+
