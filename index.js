@@ -14,7 +14,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 const DB_NAME = 'daalMail';
 const USERS_COLLECTION = 'users';
-const ORDERS_COLLECTION = 'orders'; // Added ORDERS_COLLECTION
+const ORDERS_COLLECTION = 'orders';
 const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/';
 
 let cachedDb = null;
@@ -92,7 +92,7 @@ app.post('/webhook', async (req, res) => {
   console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, location: ${JSON.stringify(location)}`);
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
-  const ordersCollection = db.collection(ORDERS_COLLECTION); // Use the ordersCollection
+  const ordersCollection = db.collection(ORDERS_COLLECTION);
 
   if (!userState[from]) {
     userState[from] = { stage: 'start' };
@@ -101,7 +101,7 @@ app.post('/webhook', async (req, res) => {
   const state = userState[from];
   console.log(`POST /webhook: User state for ${from}:`, state);
 
-  if (msgBody === 'hello' || state.stage === 'start') {
+  if (msgBody === 'hello' || msgBody === 'hi' || state.stage === 'start') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
     if (!existingUser) {
       state.stage = 'collect_location';
@@ -110,6 +110,9 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'menu';
       await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track your order');
     }
+    return res.sendStatus(200);
+  } else if (state.stage === 'start') {
+    await sendMessage(from, "Please send 'hi' or 'hello' to start.");
     return res.sendStatus(200);
   }
 
@@ -143,9 +146,7 @@ app.post('/webhook', async (req, res) => {
       await sendMessage(from, msg);
     }
     return res.sendStatus(200);
-  }
-
-  if (msgBody === '2' && state.stage === 'menu') {
+  } else if (msgBody === '2' && state.stage === 'menu') {
     state.stage = 'track_order';
     const waNumberForQuery = from.startsWith('+') ? from : `+${from}`;
     console.log(`POST /webhook: Tracking orders for waNumber: ${waNumberForQuery}`);
@@ -164,6 +165,9 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'done';
     }
     return res.sendStatus(200);
+  } else if (state.stage === 'menu') {
+    await sendMessage(from, "Invalid option. Please choose 1 or 2.");
+    return res.sendStatus(200);
   }
 
   if (state.stage === 'track_order' && state.orders) {
@@ -171,11 +175,17 @@ app.post('/webhook', async (req, res) => {
     if (!isNaN(orderNumberChoice) && orderNumberChoice > 0 && orderNumberChoice <= state.orders.length) {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
-      state.stage = 'done'; // Set stage to 'done' after tracking
+      state.stage = 'done';
+       delete userState[from];
+      await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+      return res.sendStatus(200);
     } else {
       await sendMessage(from, "❌ Invalid order number. Please enter a valid number from the list.");
+      return res.sendStatus(200);
     }
-    return res.sendStatus(200);
+  }  else if (state.stage === 'track_order') {
+     await sendMessage(from, "❌ Invalid input. Please enter a valid order number from the list.");
+     return res.sendStatus(200);
   }
 
   if (state.stage === 'choose_address') {
@@ -193,6 +203,9 @@ app.post('/webhook', async (req, res) => {
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
     }
+    return res.sendStatus(200);
+  } else if (state.stage === 'choose_address') {
+    await sendMessage(from, "❌ Invalid input. Please enter a valid address number from the list.");
     return res.sendStatus(200);
   }
 
@@ -224,6 +237,7 @@ app.post('/webhook', async (req, res) => {
 
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
+     delete userState[from];
     await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
     return res.sendStatus(200);
   }
@@ -237,7 +251,7 @@ app.post('/create-order', async (req, res) => {
   try {
     const db = await connectToDatabase();
     const ordersCollection = db.collection('orders');
-    const usersCollection = db.collection(USERS_COLLECTION);
+    const usersCollection = db.collection('users');
 
     const { orderItems, total, waNumber } = req.body;
     console.log("POST /create-order: Received data:", { orderItems, total, waNumber });
