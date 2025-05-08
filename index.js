@@ -106,24 +106,49 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  if (msgBody === '1' && state.stage === 'menu') {
+    if (msgBody === '1' && state.stage === 'menu') {
     console.log(`POST /webhook: Handling option 1 for ${from}, stage is menu`);
     const existingUser = await usersCollection.findOne({ waNumber: from });
     console.log('POST /webhook: Existing user:', existingUser);
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
       state.stage = 'collect_address';
-      console.log(`POST /webhook: Setting stage to 'collect_address' for ${from}`);
       await sendMessage(from, '📍 Please share your address to proceed with your order.');
     } else {
-      const prevAddr = existingUser.previousAddresses[0].address;
-      console.log(`POST /webhook: Found previous address for ${from}: ${prevAddr}`);
-      await sendMessage(from, `📦 We found your previous address:\n${prevAddr}\n\nTo continue ordering, visit: ${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber
-      state.stage = 'done';
-      console.log(`POST /webhook: Setting stage to 'done' for ${from}`);
+      state.stage = 'choose_address';
+      state.addressOptions = existingUser.previousAddresses;
+      let message = '📦 We found your previous addresses:\n';
+      existingUser.previousAddresses.forEach((item, index) => {
+        message += `${index + 1}. ${item.address}\n`;
+      });
+      message += `${existingUser.previousAddresses.length + 1}. Enter a new address`;
+      message += `\n\nPlease reply with a number to select one.`;
+      await sendMessage(from, message);
     }
     return res.sendStatus(200);
   }
+
+  if (state.stage === 'choose_address') {
+    const choice = parseInt(msgBody);
+    const options = state.addressOptions || [];
+
+    if (isNaN(choice) || choice < 1 || choice > options.length + 1) {
+      await sendMessage(from, '❌ Invalid option. Please choose a valid number from the list.');
+      return res.sendStatus(200);
+    }
+
+    if (choice === options.length + 1) {
+      // User chose to enter new address
+      state.stage = 'collect_address';
+      await sendMessage(from, '📍 Please enter your new address:');
+    } else {
+      const selectedAddress = options[choice - 1].address;
+      state.stage = 'done';
+      await sendMessage(from, `✅ Selected address: ${selectedAddress}\n\nYou can now order from the menu here:\n${NETLIFY_MENU_LINK}?waNumber=${from}`);
+    }
+    return res.sendStatus(200);
+  }
+
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
