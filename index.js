@@ -35,25 +35,16 @@ const connectToDatabase = async () => {
   }
 };
 
-async function sendMessage(to, message, type = 'text') {
+async function sendMessage(to, message) {
   try {
-    console.log(`sendMessage: called with to: ${to}, message: ${message}, type: ${type}`);
-    const payload = {
-      messaging_product: 'whatsapp',
-      to,
-    };
-
-    if (type === 'text') {
-      payload.text = { body: message };
-    } else if (type === 'image') {
-      payload.image = {
-        url: message, // Use message as the URL
-      };
-    }
-
+    console.log(`sendMessage: called with to: ${to}, message: ${message}`);
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      payload,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        text: { body: message },
+      },
       {
         headers: {
           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -63,7 +54,7 @@ async function sendMessage(to, message, type = 'text') {
     );
     console.log('sendMessage: successful');
   } catch (err) {
-    console.error('Error sending message:', err.response?.data || err.message);
+    console.error('sendMessage: Error sending message:', err.response?.data || err.message);
   }
 }
 
@@ -83,19 +74,6 @@ app.get('/webhook', (req, res) => {
 });
 
 const userState = {};
-
-// Simulate a payment verification function
-async function verifyPayment(orderNumber) {
-  // Replace this with your actual payment verification logic (e.g., check with a payment gateway)
-  console.log(`verifyPayment: Simulating payment verification for order: ${orderNumber}`);
-  // Simulate a successful payment 80% of the time
-  const isPaymentSuccessful = Math.random() < 0.8;
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve(isPaymentSuccessful);
-    }, 2000); // Simulate a 2-second delay for payment processing
-  });
-}
 
 app.post('/webhook', async (req, res) => {
   console.log("POST /webhook: Received webhook event");
@@ -198,16 +176,16 @@ app.post('/webhook', async (req, res) => {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
       state.stage = 'done';
-      delete userState[from];
+       delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } else {
       await sendMessage(from, "❌ Invalid order number. Please enter a valid number from the list.");
       return res.sendStatus(200);
     }
-  } else if (state.stage === 'track_order') {
-    await sendMessage(from, "❌ Invalid input. Please enter a valid order number from the list.");
-    return res.sendStatus(200);
+  }  else if (state.stage === 'track_order') {
+     await sendMessage(from, "❌ Invalid input. Please enter a valid order number from the list.");
+     return res.sendStatus(200);
   }
 
   if (state.stage === 'choose_address') {
@@ -217,54 +195,8 @@ app.post('/webhook', async (req, res) => {
       const selectedAddress = state.addresses[choice - 1].address;
       state.stage = 'done';
       console.log(`POST /webhook: Selected address: ${selectedAddress} for ${from}`);
-      //  Here, instead of sending the netlify link, we should create an order and ask for payment.
-      const orderData = {
-        waNumber: from,
-        orderItems: [
-          { name: "Sample Item 1", quantity: 2 },
-          { name: "Sample Item 2", quantity: 1 },
-        ],  //  Replace with actual order items from Netlify
-        total: 100, // Replace with actual total from Netlify
-      };
-
-      // Simulate order creation
-      try {
-        const db = await connectToDatabase();
-        const ordersCollection = db.collection(ORDERS_COLLECTION);
-        const newOrder = {
-          waNumber: from,
-          orderItems: orderData.orderItems,
-          total: orderData.total,
-          status: 'pending',  // Initial status
-          orderTime: new Date(),
-          orderNumber: `DM${Math.floor(Math.random() * 1000000)}`,
-        };
-        state.orderNumber = newOrder.orderNumber;  // Store order number in state
-        await ordersCollection.insertOne(newOrder);
-
-        const orderSummary = `
-Order Summary:
-Order Number: ${newOrder.orderNumber}
-Total: ${newOrder.total}
-Items:
-${newOrder.orderItems.map(item => `- ${item.name} x ${item.quantity}`).join('\n')}
-Please select payment method:
-1. COD
-2. UPI
-`;
-        await sendMessage(from, orderSummary);
-        state.stage = 'payment_selection'; // Move to payment selection stage
-
-      } catch (error) {
-        console.error("Error creating order:", error);
-        await sendMessage(from, "❌ Failed to create order. Please try again.");
-        state.stage = 'done';
-        delete userState[from];
-        await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
-        return res.sendStatus(200);
-
-      }
-      //await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+      await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
@@ -303,77 +235,10 @@ Please select payment method:
     }
   }
 
-  if (state.stage === 'payment_selection') {
-    if (msgBody === '1') {
-      // COD
-      try {
-        const db = await connectToDatabase();
-        const ordersCollection = db.collection(ORDERS_COLLECTION);
-        await ordersCollection.updateOne({ orderNumber: state.orderNumber }, { $set: { status: 'confirmed', paymentMethod: 'COD' } });
-        await sendMessage(from, `✅ Your order is confirmed and will be delivered soon. Your Order Number is ${state.orderNumber}. Payment Mode: COD`);
-        state.stage = 'done';
-        delete userState[from];
-        await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
-        return res.sendStatus(200);
-      } catch (error) {
-        console.error("Error updating order status:", error);
-        await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
-        state.stage = 'done';
-        delete userState[from];
-        await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
-        return res.sendStatus(200);
-      }
-    } else if (msgBody === '2') {
-      // UPI -  Simulate UPI QR code
-      const qrCodeUrl = "https://via.placeholder.com/200x200?text=UPI+QR+Code";  //  Replace with actual QR code generation
-      await sendMessage(from, "Please scan this QR code to pay:", 'image');
-      await sendMessage(from, "Once payment is complete, send 'paid' to confirm.");
-      state.stage = 'awaiting_payment';
-      return res.sendStatus(200);
-
-    } else {
-      await sendMessage(from, "Invalid payment option. Please select 1 for COD or 2 for UPI.");
-      return res.sendStatus(200);
-    }
-  }
-
-  if (state.stage === 'awaiting_payment') {
-    if (msgBody === 'paid') {
-      //  Simulate payment verification
-      const isPaymentSuccessful = await verifyPayment(state.orderNumber);
-      if (isPaymentSuccessful) {
-        try {
-          const db = await connectToDatabase();
-          const ordersCollection = db.collection(ORDERS_COLLECTION);
-          await ordersCollection.updateOne({ orderNumber: state.orderNumber }, { $set: { status: 'confirmed', paymentMethod: 'UPI' } });
-          await sendMessage(from, `✅ Payment confirmed! Your order is confirmed and will be delivered soon. Your Order Number is ${state.orderNumber}. Payment Mode: UPI`);
-          state.stage = 'done';
-          delete userState[from];
-          await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
-          return res.sendStatus(200);
-        } catch (error) {
-          console.error("Error updating order status:", error);
-          await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
-          state.stage = 'done';
-          delete userState[from];
-          await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
-          return res.sendStatus(200);
-        }
-      } else {
-        await sendMessage(from, "❌ Payment failed. Please try again.");
-        state.stage = 'payment_selection'; // Go back to payment selection
-        return res.sendStatus(200);
-      }
-    } else {
-      await sendMessage(from, "Please send 'paid' after completing the payment.");
-      return res.sendStatus(200);
-    }
-  }
-
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-    delete userState[from];
-    await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+     delete userState[from];
+    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
     return res.sendStatus(200);
   }
 
@@ -427,7 +292,7 @@ Order Summary:
 Order Number: ${newOrder.orderNumber}
 Total: ${total}
 Items:
-${newOrder.orderItems.map(item => `- ${item.name} x ${item.quantity}`).join('\n')}
+${orderItems.map(item => `- ${item.name} x ${item.quantity}`).join('\n')}
 Status: ${newOrder.status}
     `;
     console.log("POST /create-order: Order summary: ", orderSummary);
