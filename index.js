@@ -79,6 +79,7 @@ app.post('/webhook', async (req, res) => {
   const entry = req.body.entry?.[0];
   const changes = entry?.changes?.[0];
   const message = changes?.value?.messages?.[0];
+  const location = message?.location; // Get the location
 
   if (!message) {
     console.log("POST /webhook: No message found in payload");
@@ -87,7 +88,7 @@ app.post('/webhook', async (req, res) => {
 
   const from = message.from;
   const msgBody = message.text?.body?.trim().toLowerCase() || '';
-  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}`);
+  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, location: ${JSON.stringify(location)}`); // Include location in log
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
 
@@ -99,9 +100,26 @@ app.post('/webhook', async (req, res) => {
   console.log(`POST /webhook: User state for ${from}:`, state);
 
   if (msgBody === 'hello' || state.stage === 'start') {
-    state.stage = 'menu';
-    console.log(`POST /webhook: Setting stage to 'menu' for ${from}`);
-    await sendMessage(from, '👋 Welcome to Daal Mail!\n\nPlease choose an option:\n1. Place an order');
+    const existingUser = await usersCollection.findOne({ waNumber: from });
+    if (!existingUser) {
+      state.stage = 'collect_location'; // First-time user flow
+      await sendMessage(from, "👋 Welcome to Daal Mail!\n\nPlease share your location to continue with your order.");
+    } else {
+      state.stage = 'menu'; //returning user
+      await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:\n1. Place an order');
+    }
+    return res.sendStatus(200);
+  }
+
+  if (state.stage === 'collect_location') {
+    if (location) {
+      state.userLocation = location;
+      state.stage = 'collect_address';
+      await sendMessage(from, "📍 Thank you for sharing your location. Now, please enter your address:");
+      console.log(`POST /webhook:  location : ${JSON.stringify(location)}`);
+    } else {
+      await sendMessage(from, "❌ Location is required. Please share your location to proceed.");
+    }
     return res.sendStatus(200);
   }
 
@@ -109,8 +127,8 @@ app.post('/webhook', async (req, res) => {
     const existingUser = await usersCollection.findOne({ waNumber: from });
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
-      userState[from] = { stage: 'collect_address' };
-      await sendMessage(from, '📍 No previous address found. Please enter your address to continue:');
+      state.stage = 'collect_location'; //collect location first for new user
+      await sendMessage(from, '📍 No previous address found. Please share your location to continue with your order:');
     } else {
       const addresses = existingUser.previousAddresses;
       let msg = '📍 We found your previous addresses:\n\n';
@@ -118,10 +136,8 @@ app.post('/webhook', async (req, res) => {
         msg += `${index + 1}. ${item.address}\n`;
       });
       msg += `${addresses.length + 1}. ➕ Add a new address\n\nPlease reply with the number of your choice.`;
-      userState[from] = {
-        stage: 'choose_address',
-        addresses,
-      };
+      state.stage = 'choose_address';
+      state.addresses = addresses;
       await sendMessage(from, msg);
     }
     return res.sendStatus(200);
@@ -137,8 +153,8 @@ app.post('/webhook', async (req, res) => {
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
     } else if (choice === state.addresses.length + 1) {
-      userState[from] = { stage: 'collect_address', addresses: state.addresses };
-      await sendMessage(from, '📍 Please enter your new address:');
+      state.stage = 'collect_location'; // collect location before address
+      await sendMessage(from, '📍 Please share your location:');
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
     }
@@ -147,26 +163,35 @@ app.post('/webhook', async (req, res) => {
 
   if (state.stage === 'collect_address') {
     const address = msgBody;
-    const existingUser = await usersCollection.findOne({ waNumber: from });
-    const newEntry = { address, timestamp: new Date() };
-
-    if (existingUser) {
-      await usersCollection.updateOne({ waNumber: from }, { $push: { previousAddresses: newEntry } });
-    } else {
-      await usersCollection.insertOne({ waNumber: from, previousAddresses: [newEntry] });
-    }
-
-    state.stage = 'done';
-    console.log(`POST /webhook: New address saved: ${address} for ${from}`);
-    await sendMessage(from, `✅ Address saved: ${address}`);
-    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
-    return res.sendStatus(200);
+     if(state.userLocation){
+        const existingUser = await usersCollection.findOne({ waNumber: from });
+        const newEntry = { address, location: state.userLocation, timestamp: new Date() }; // Include the location
+        if (existingUser) {
+          await usersCollection.updateOne({ waNumber: from }, { $push: { previousAddresses: newEntry } });
+        } else {
+          const newUser = {
+            waNumber: from,
+            previousAddresses: [newEntry],
+          }
+          await usersCollection.insertOne(newUser);
+        }
+        state.stage = 'done';
+        console.log(`POST /webhook: New address saved: ${address} for ${from}`);
+        await sendMessage(from, `✅ Address saved: ${address}`);
+        await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`); // Append waNumber here
+        return res.sendStatus(200);
+     }
+     else{
+        await sendMessage(from, "❌ Location is required. Please share your location and address again.");
+        state.stage = 'collect_location';
+        return res.sendStatus(200);
+     }
   }
 
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-     await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-     return res.sendStatus(200);
+    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
