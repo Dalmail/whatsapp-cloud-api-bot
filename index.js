@@ -101,17 +101,14 @@ app.post('/webhook', async (req, res) => {
   console.log("POST /webhook: Received webhook event");
   const entry = req.body.entry?.[0];
   const changes = entry?.changes?.[0];
-  const message = changes?.value?.messages?.[0];
+  const value = changes?.value;  // Changed to get value
+  const message = value?.messages?.[0];
   const location = message?.location;
-  const buttonReply = message?.button?.payload; // Get button payload
+  // IMPORTANT:  Check for button reply in value, NOT message.
+  const buttonReply = value?.interactive?.button_reply?.id;
+  const msgBody = message?.text?.body?.trim().toLowerCase() || '';
+  const from = message?.from;
 
-  if (!message) {
-    console.log("POST /webhook: No message found in payload. Full request body:", JSON.stringify(req.body, null, 2));
-    return res.sendStatus(200);
-  }
-
-  const from = message.from;
-  const msgBody = message.text?.body?.trim().toLowerCase() || '';
   console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonReply: ${buttonReply}, location: ${JSON.stringify(location)}`);
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
