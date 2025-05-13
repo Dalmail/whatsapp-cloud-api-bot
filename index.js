@@ -339,7 +339,7 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// Helper function for handling place order flow
+// Helper function for handling place order flow - FIXED to handle WhatsApp button limit
 async function handlePlaceOrder(from, state, usersCollection) {
   const existingUser = await usersCollection.findOne({ waNumber: from });
   if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
@@ -350,8 +350,12 @@ async function handlePlaceOrder(from, state, usersCollection) {
 
   const addresses = existingUser.previousAddresses;
   
-  if (addresses.length <= 3) {
-    // Use buttons for 3 or fewer addresses
+  // Store addresses in state
+  state.stage = 'choose_address';
+  state.addresses = addresses;
+  
+  if (addresses.length <= 2) {
+    // Use buttons only if we have 2 or fewer addresses (saving 1 button for "Add new address")
     let msg = '📍 We found your previous addresses:\n\n';
     addresses.forEach((item, index) => {
       msg += `${index + 1}. ${item.address}\n`;
@@ -364,42 +368,16 @@ async function handlePlaceOrder(from, state, usersCollection) {
     
     buttons.push({ title: '➕ Add new address', id: 'new_address' });
     
-    state.stage = 'choose_address';
-    state.addresses = addresses;
     await sendMessage(from, msg, true, buttons);
   } else {
-    // Use interactive list for more than 3 addresses
-    try {
-      const sections = [{
-        title: "Your Addresses",
-        rows: addresses.slice(0, 10).map((item, index) => ({
-          id: `address_${index}`,
-          title: `Address ${index + 1}`,
-          description: item.address.length > 60 ? item.address.substring(0, 57) + '...' : item.address
-        }))
-      }];
-      
-      await sendListMessage(
-        from,
-        '📍 Your Addresses',
-        'We found your previous addresses. Please select one:',
-        'Address List',
-        sections
-      );
-      
-      state.stage = 'choose_address';
-      state.addresses = addresses;
-    } catch (error) {
-      console.error('Failed to send list message, falling back to text:', error);
-      let msg = '📍 We found your previous addresses:\n\n';
-      addresses.forEach((item, index) => {
-        msg += `${index + 1}. ${item.address}\n`;
-      });
-      msg += `\nPlease reply with the number of your address.`;
-      state.stage = 'choose_address';
-      state.addresses = addresses;
-      await sendMessage(from, msg);
-    }
+    // Use a simple numbered list for 3+ addresses
+    let msg = '📍 We found your previous addresses:\n\n';
+    addresses.forEach((item, index) => {
+      msg += `${index + 1}. ${item.address}\n`;
+    });
+    msg += `\n${addresses.length + 1}. Add new address`;
+    
+    await sendMessage(from, msg, false);
   }
 }
 
@@ -445,7 +423,7 @@ async function handleTrackOrder(from, state, ordersCollection) {
   }
 }
 
-// Order creation endpoint remains the same
+// Order creation endpoint
 app.post('/create-order', async (req, res) => {
   console.log("POST /create-order: Entered /create-order route");
   try {
