@@ -36,6 +36,10 @@ const connectToDatabase = async () => {
 };
 
 async function sendMessage(to, message, type = 'text', buttons = []) {
+  if (!to) {
+    console.error('sendMessage: ERROR - "to" is undefined.  Message not sent.');
+    return; // IMPORTANT:  Stop if there's no recipient.
+  }
   try {
     console.log(`sendMessage: called with to: ${to}, message: ${message}, type: ${type}, buttons: ${JSON.stringify(buttons)}`);
     const payload = {
@@ -101,13 +105,18 @@ app.post('/webhook', async (req, res) => {
   console.log("POST /webhook: Received webhook event");
   const entry = req.body.entry?.[0];
   const changes = entry?.changes?.[0];
-  const value = changes?.value;  // Changed to get value
+  const value = changes?.value;
   const message = value?.messages?.[0];
   const location = message?.location;
-  // IMPORTANT:  Check for button reply in value, NOT message.
   const buttonReply = value?.interactive?.button_reply?.id;
   const msgBody = message?.text?.body?.trim().toLowerCase() || '';
+  // CRITICAL:  Check if message exists before accessing its properties.
   const from = message?.from;
+
+  if (!from) {
+    console.error("POST /webhook: ERROR - 'from' is undefined.  Cannot process message.");
+    return res.sendStatus(200); //  IMPORTANT:  Return 200 to acknowledge receipt.
+  }
 
   console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonReply: ${buttonReply}, location: ${JSON.stringify(location)}`);
   const db = await connectToDatabase();
@@ -121,7 +130,6 @@ app.post('/webhook', async (req, res) => {
   const state = userState[from];
   console.log(`POST /webhook: User state for ${from}:`, state);
 
-  // Use buttonReply if available, otherwise use msgBody.  Important for button presses.
   const userInput = buttonReply || msgBody;
 
   if (userInput === 'hello' || userInput === 'hi' || state.stage === 'start') {
@@ -189,8 +197,8 @@ app.post('/webhook', async (req, res) => {
     } else {
       await sendMessage(from, "❌ No previous orders found.");
       state.stage = 'done';
-      delete userState[from]; // Ensure state is reset
-      return res.sendStatus(200); // Added return
+      delete userState[from];
+      return res.sendStatus(200);
     }
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
@@ -207,7 +215,7 @@ app.post('/webhook', async (req, res) => {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
       state.stage = 'done';
-      delete userState[from]; // Ensure state is reset
+      delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } else {
@@ -232,7 +240,7 @@ Order Summary:
 Selected Address: ${selectedAddress}
 Please select payment method:
 `;
-      await sendMessage(from, orderSummary, 'button', [      // Changed here
+      await sendMessage(from, orderSummary, 'button', [
         { id: 'cod', title: 'COD' },
         { id: 'upi', title: 'UPI' },
       ]);
@@ -240,7 +248,7 @@ Please select payment method:
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
-      return res.sendStatus(200); // Added return
+      return res.sendStatus(200);
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
       return res.sendStatus(200);
@@ -264,7 +272,7 @@ Please select payment method:
         };
         await usersCollection.insertOne(newUser);
       }
-      state.stage = 'done'; //set stage
+      state.stage = 'done';
       console.log(`POST /webhook: New address saved: ${address} for ${from}`);
       await sendMessage(from, `✅ Address saved: ${address}`);
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
@@ -297,14 +305,14 @@ Please select payment method:
       await ordersCollection.insertOne(newOrder);
       await sendMessage(from, `✅ Your order is confirmed and will be delivered soon to ${state.selectedAddress}. Your Order Number is ${newOrder.orderNumber}. Payment Mode: COD`);
       state.stage = 'done';
-      delete userState[from]; // Ensure state is reset
+      delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } catch (error) {
       console.error("Error updating order status:", error);
       await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
       state.stage = 'done';
-      delete userState[from]; // Ensure state is reset
+      delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     }
@@ -316,7 +324,7 @@ Please select payment method:
     state.stage = 'awaiting_payment';
     return res.sendStatus(200);
   } else if (state.stage === 'payment_selection') {
-    await sendMessage(from, "Invalid payment option. Please select payment method:", 'button', [      // Changed here
+    await sendMessage(from, "Invalid payment option. Please select payment method:", 'button', [
       { id: 'cod', title: 'COD' },
       { id: 'upi', title: 'UPI' },
     ]);
@@ -333,21 +341,21 @@ Please select payment method:
           await ordersCollection.updateOne({ orderNumber: state.orderNumber }, { $set: { status: 'confirmed', paymentMethod: 'UPI' } });
           await sendMessage(from, `✅ Payment confirmed! Your order is confirmed and will be delivered soon. Your Order Number is ${state.orderNumber}. Payment Mode: UPI`);
           state.stage = 'done';
-          delete userState[from]; // Ensure state is reset
+          delete userState[from];
           await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
           return res.sendStatus(200);
         } catch (error) {
           console.error("Error updating order status:", error);
           await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
           state.stage = 'done';
-          delete userState[from]; // Ensure state is reset
+          delete userState[from];
           await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
           return res.sendStatus(200);
         }
       } else {
         await sendMessage(from, "❌ Payment failed. Please try again.");
         state.stage = 'payment_selection';
-        await sendMessage(from, "Please select payment method:", 'button', [      // Changed here
+        await sendMessage(from, "Please select payment method:", 'button', [
           { id: 'cod', title: 'COD' },
           { id: 'upi', title: 'UPI' },
         ]);
@@ -361,7 +369,7 @@ Please select payment method:
 
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-    delete userState[from]; // Ensure state is reset
+    delete userState[from];
     await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
     return res.sendStatus(200);
   }
