@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { MongoClient } = require('mongodb');
+const { MongoClient } from 'mongodb');
 require('dotenv').config();
 
 const app = express();
@@ -38,7 +38,7 @@ const connectToDatabase = async () => {
 async function sendMessage(to, message, type = 'text', buttons = []) {
   if (!to) {
     console.error('sendMessage: ERROR - "to" is undefined.  Message not sent.');
-    return; // IMPORTANT:  Stop if there's no recipient.
+    return;
   }
   try {
     console.log(`sendMessage: called with to: ${to}, message: ${message}, type: ${type}, buttons: ${JSON.stringify(buttons)}`);
@@ -110,12 +110,11 @@ app.post('/webhook', async (req, res) => {
   const location = message?.location;
   const buttonReply = value?.interactive?.button_reply?.id;
   const msgBody = message?.text?.body?.trim().toLowerCase() || '';
-  // CRITICAL:  Check if message exists before accessing its properties.
   const from = message?.from;
 
   if (!from) {
     console.error("POST /webhook: ERROR - 'from' is undefined.  Cannot process message.");
-    return res.sendStatus(200); //  IMPORTANT:  Return 200 to acknowledge receipt.
+    return res.status(200).send();
   }
 
   console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonReply: ${buttonReply}, location: ${JSON.stringify(location)}`);
