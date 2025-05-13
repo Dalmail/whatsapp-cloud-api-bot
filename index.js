@@ -16,6 +16,10 @@ const DB_NAME = 'daalMail';
 const USERS_COLLECTION = 'users';
 const ORDERS_COLLECTION = 'orders';
 const NETLIFY_MENU_LINK = 'https://sweet-sopapillas-fb37b3.netlify.app/';
+const listReply = message?.interactive?.list_reply;
+const buttonId = buttonResponse?.id || listReply?.id;
+const buttonTitle = buttonResponse?.title?.toLowerCase() || listReply?.title?.toLowerCase() || '';
+
 
 let cachedDb = null;
 const connectToDatabase = async () => {
@@ -176,19 +180,82 @@ app.post('/webhook', async (req, res) => {
           const addresses = existingUser.previousAddresses;
           let msg = '📍 We found your previous addresses:\n\n';
           const buttons = addresses.slice(0, 3).map((item, index) => ({
-            title: `${index + 1}. ${item.address}`,
-            id: `address_${index}`,
-          }));
+  title: `Address ${index + 1}`,
+  id: `address_${index}`
+}));
 
-          if (addresses.length > 3) {
-            buttons.push({ title: 'More options...', id: 'more_addresses' });
-          } else {
-             buttons.push({ title: '➕ Add new address', id: 'new_address' });
+if (addresses.length > 3) {
+  buttons.push({ title: 'More options...', id: 'more_addresses' });
+} else {
+  buttons.push({ title: '➕ Add new address', id: 'new_address' });
+}
+
+state.stage = 'choose_address';
+state.addresses = addresses;
+
+if (addresses.length > 3) {
+  // Use interactive.list
+  const listPayload = {
+    messaging_product: 'whatsapp',
+    to: from,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: {
+        type: 'text',
+        text: '📍 Select Address'
+      },
+      body: {
+        text: 'We found your previous addresses. Please select one to continue:'
+      },
+      action: {
+        button: 'Choose Address',
+        sections: [
+          {
+            title: 'Saved Addresses',
+            rows: addresses.map((item, index) => ({
+              id: `address_${index}`,
+              title: `Address ${index + 1}`,
+              description: item.address
+            }))
+          },
+          {
+            title: 'Other Options',
+            rows: [
+              {
+                id: 'new_address',
+                title: '➕ Add new address',
+                description: 'Add a new delivery address'
+              }
+            ]
           }
-          state.stage = 'choose_address';
-          state.addresses = addresses;
-          await sendMessage(from, msg, 'button', buttons);
-        }
+        ]
+      }
+    }
+  };
+
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+    listPayload,
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+} else {
+  // Use buttons as-is for 3 or fewer addresses
+  const buttons = addresses.slice(0, 3).map((item, index) => ({
+    title: `Address ${index + 1}`,
+    id: `address_${index}`
+  }));
+
+  buttons.push({ title: '➕ Add new address', id: 'new_address' });
+
+  await sendMessage(from, msg, true, buttons);
+}
+
       } else if (userInput === 'track_order' && state.stage === 'menu') {
         state.stage = 'track_order';
         const waNumberForQuery = from.startsWith('+') ? from : `+${from}`;
