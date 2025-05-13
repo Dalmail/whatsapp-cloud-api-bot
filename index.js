@@ -46,18 +46,21 @@ async function sendMessage(to, message, type = 'text', buttons = []) {
     if (type === 'text') {
       payload.text = { body: message };
     } else if (type === 'button') {
-      payload.type = 'button';
-      payload.body = {
-        text: message,
-      };
-      payload.action = {
-        buttons: buttons.map((button) => ({
-          type: 'reply',
-          reply: {
-            id: button.id,
-            title: button.title,
-          },
-        })),
+      payload.type = 'interactive';
+      payload.interactive = {
+        type: 'button',
+        body: {
+          text: message,
+        },
+        action: {
+          buttons: buttons.map((button) => ({
+            type: 'reply',
+            reply: {
+              id: button.id,
+              title: button.title,
+            },
+          })),
+        },
       };
     }
 
@@ -121,7 +124,7 @@ app.post('/webhook', async (req, res) => {
   const state = userState[from];
   console.log(`POST /webhook: User state for ${from}:`, state);
 
-  // Use buttonReply if available, otherwise use msgBody
+  // Use buttonReply if available, otherwise use msgBody.  Important for button presses.
   const userInput = buttonReply || msgBody;
 
   if (userInput === 'hello' || userInput === 'hi' || state.stage === 'start') {
@@ -192,7 +195,7 @@ app.post('/webhook', async (req, res) => {
     }
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
-    await sendMessage(from, "Invalid option. Please choose an option:", 'button', [
+    await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:', 'button', [
       { id: 'place_order', title: 'Place an order' },
       { id: 'track_order', title: 'Track your order' },
     ]);
@@ -273,7 +276,7 @@ Please select payment method:
     }
   }
 
-    if (userInput === 'cod' && state.stage === 'payment_selection') {
+  if (userInput === 'cod' && state.stage === 'payment_selection') {
     // COD
     try {
       const db = await connectToDatabase();
@@ -301,7 +304,7 @@ Please select payment method:
       console.error("Error updating order status:", error);
       await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
       state.stage = 'done';
-       delete userState[from];
+      delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     }
@@ -313,7 +316,7 @@ Please select payment method:
     state.stage = 'awaiting_payment';
     return res.sendStatus(200);
   } else if (state.stage === 'payment_selection') {
-    await sendMessage(from, "Invalid payment option. Please select 1 for COD or 2 for UPI.", 'button', [
+    await sendMessage(from, "Invalid payment option. Please select payment method:", 'button', [      // Changed here
       { id: 'cod', title: 'COD' },
       { id: 'upi', title: 'UPI' },
     ]);
@@ -344,7 +347,7 @@ Please select payment method:
       } else {
         await sendMessage(from, "❌ Payment failed. Please try again.");
         state.stage = 'payment_selection';
-         await sendMessage(from, "Please select payment method:", 'button', [      // Added buttons here
+        await sendMessage(from, "Please select payment method:", 'button', [      // Changed here
           { id: 'cod', title: 'COD' },
           { id: 'upi', title: 'UPI' },
         ]);
