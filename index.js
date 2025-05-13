@@ -106,7 +106,7 @@ app.post('/webhook', async (req, res) => {
   const buttonReply = message?.button?.payload; // Get button payload
 
   if (!message) {
-    console.log("POST /webhook: No message found in payload");
+    console.log("POST /webhook: No message found in payload. Full request body:", JSON.stringify(req.body, null, 2));
     return res.sendStatus(200);
   }
 
@@ -192,6 +192,7 @@ app.post('/webhook', async (req, res) => {
     } else {
       await sendMessage(from, "❌ No previous orders found.");
       state.stage = 'done';
+      delete userState[from]; // Ensure state is reset
     }
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
@@ -208,7 +209,7 @@ app.post('/webhook', async (req, res) => {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
       state.stage = 'done';
-      delete userState[from];
+      delete userState[from]; // Ensure state is reset
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } else {
@@ -264,7 +265,7 @@ Please select payment method:
         };
         await usersCollection.insertOne(newUser);
       }
-      state.stage = 'done';
+      state.stage = 'done'; //set stage
       console.log(`POST /webhook: New address saved: ${address} for ${from}`);
       await sendMessage(from, `✅ Address saved: ${address}`);
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
@@ -297,14 +298,14 @@ Please select payment method:
       await ordersCollection.insertOne(newOrder);
       await sendMessage(from, `✅ Your order is confirmed and will be delivered soon to ${state.selectedAddress}. Your Order Number is ${newOrder.orderNumber}. Payment Mode: COD`);
       state.stage = 'done';
-      delete userState[from];
+      delete userState[from]; // Ensure state is reset
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } catch (error) {
       console.error("Error updating order status:", error);
       await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
       state.stage = 'done';
-      delete userState[from];
+      delete userState[from]; // Ensure state is reset
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     }
@@ -333,14 +334,14 @@ Please select payment method:
           await ordersCollection.updateOne({ orderNumber: state.orderNumber }, { $set: { status: 'confirmed', paymentMethod: 'UPI' } });
           await sendMessage(from, `✅ Payment confirmed! Your order is confirmed and will be delivered soon. Your Order Number is ${state.orderNumber}. Payment Mode: UPI`);
           state.stage = 'done';
-          delete userState[from];
+          delete userState[from]; // Ensure state is reset
           await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
           return res.sendStatus(200);
         } catch (error) {
           console.error("Error updating order status:", error);
           await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
           state.stage = 'done';
-          delete userState[from];
+          delete userState[from]; // Ensure state is reset
           await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
           return res.sendStatus(200);
         }
@@ -361,12 +362,15 @@ Please select payment method:
 
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-    delete userState[from];
+    delete userState[from]; // Ensure state is reset
     await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
     return res.sendStatus(200);
   }
 
-  res.sendStatus(200);
+  // Default response for unexpected input
+  console.log(`POST /webhook: Unexpected input: ${userInput} in stage ${state.stage} from ${from}`);
+  await sendMessage(from, "❌ I'm not sure what you mean. Please send 'hi' or 'hello' to start.");
+  return res.sendStatus(200);
 });
 
 // New route to handle order creation from Netlify
