@@ -193,6 +193,7 @@ app.post('/webhook', async (req, res) => {
       await sendMessage(from, "❌ No previous orders found.");
       state.stage = 'done';
       delete userState[from]; // Ensure state is reset
+      return res.sendStatus(200); // Added return
     }
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
@@ -242,10 +243,11 @@ Please select payment method:
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
+      return res.sendStatus(200); // Added return
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
+      return res.sendStatus(200);
     }
-    return res.sendStatus(200);
   } else if (state.stage === 'choose_address') {
     await sendMessage(from, "❌ Invalid input. Please enter a valid address number from the list.");
     return res.sendStatus(200);
