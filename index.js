@@ -35,16 +35,35 @@ const connectToDatabase = async () => {
   }
 };
 
-async function sendMessage(to, message) {
+async function sendMessage(to, message, type = 'text', buttons = []) {
   try {
-    console.log(`sendMessage: called with to: ${to}, message: ${message}`);
+    console.log(`sendMessage: called with to: ${to}, message: ${message}, type: ${type}, buttons: ${JSON.stringify(buttons)}`);
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+    };
+
+    if (type === 'text') {
+      payload.text = { body: message };
+    } else if (type === 'button') {
+      payload.type = 'button';
+      payload.body = {
+        text: message,
+      };
+      payload.action = {
+        buttons: buttons.map((button) => ({
+          type: 'reply',
+          reply: {
+            id: button.id,
+            title: button.title,
+          },
+        })),
+      };
+    }
+
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: 'whatsapp',
-        to,
-        text: { body: message },
-      },
+      payload,
       {
         headers: {
           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -54,7 +73,7 @@ async function sendMessage(to, message) {
     );
     console.log('sendMessage: successful');
   } catch (err) {
-    console.error('sendMessage: Error sending message:', err.response?.data || err.message);
+    console.error('Error sending message:', err.response?.data || err.message);
   }
 }
 
@@ -81,6 +100,7 @@ app.post('/webhook', async (req, res) => {
   const changes = entry?.changes?.[0];
   const message = changes?.value?.messages?.[0];
   const location = message?.location;
+  const buttonReply = message?.button?.payload; // Get button payload
 
   if (!message) {
     console.log("POST /webhook: No message found in payload");
@@ -89,7 +109,7 @@ app.post('/webhook', async (req, res) => {
 
   const from = message.from;
   const msgBody = message.text?.body?.trim().toLowerCase() || '';
-  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, location: ${JSON.stringify(location)}`);
+  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonReply: ${buttonReply}, location: ${JSON.stringify(location)}`);
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
   const ordersCollection = db.collection(ORDERS_COLLECTION);
@@ -101,14 +121,20 @@ app.post('/webhook', async (req, res) => {
   const state = userState[from];
   console.log(`POST /webhook: User state for ${from}:`, state);
 
-  if (msgBody === 'hello' || msgBody === 'hi' || state.stage === 'start') {
+  // Use buttonReply if available, otherwise use msgBody
+  const userInput = buttonReply || msgBody;
+
+  if (userInput === 'hello' || userInput === 'hi' || state.stage === 'start') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
     if (!existingUser) {
       state.stage = 'collect_location';
       await sendMessage(from, "👋 Welcome to Daal Mail!\n\nPlease share your location to continue with your order.");
     } else {
       state.stage = 'menu';
-      await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:\n1. Place an order\n2. Track your order');
+      await sendMessage(from, '👋 Welcome back to Daal Mail!\n\nPlease choose an option:', 'button', [
+        { id: 'place_order', title: 'Place an order' },
+        { id: 'track_order', title: 'Track your order' },
+      ]);
     }
     return res.sendStatus(200);
   } else if (state.stage === 'start') {
@@ -128,7 +154,7 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  if (msgBody === '1' && state.stage === 'menu') {
+  if (userInput === 'place_order' && state.stage === 'menu') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
 
     if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
@@ -146,7 +172,7 @@ app.post('/webhook', async (req, res) => {
       await sendMessage(from, msg);
     }
     return res.sendStatus(200);
-  } else if (msgBody === '2' && state.stage === 'menu') {
+  } else if (userInput === 'track_order' && state.stage === 'menu') {
     state.stage = 'track_order';
     const waNumberForQuery = from.startsWith('+') ? from : `+${from}`;
     console.log(`POST /webhook: Tracking orders for waNumber: ${waNumberForQuery}`);
@@ -166,37 +192,49 @@ app.post('/webhook', async (req, res) => {
     }
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
-    await sendMessage(from, "Invalid option. Please choose 1 or 2.");
+    await sendMessage(from, "Invalid option. Please choose an option:", 'button', [
+      { id: 'place_order', title: 'Place an order' },
+      { id: 'track_order', title: 'Track your order' },
+    ]);
     return res.sendStatus(200);
   }
 
   if (state.stage === 'track_order' && state.orders) {
-    const orderNumberChoice = parseInt(msgBody);
+    const orderNumberChoice = parseInt(userInput);
     if (!isNaN(orderNumberChoice) && orderNumberChoice > 0 && orderNumberChoice <= state.orders.length) {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
       state.stage = 'done';
-       delete userState[from];
+      delete userState[from];
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } else {
       await sendMessage(from, "❌ Invalid order number. Please enter a valid number from the list.");
       return res.sendStatus(200);
     }
-  }  else if (state.stage === 'track_order') {
-     await sendMessage(from, "❌ Invalid input. Please enter a valid order number from the list.");
-     return res.sendStatus(200);
+  } else if (state.stage === 'track_order') {
+    await sendMessage(from, "❌ Invalid input. Please enter a valid order number from the list.");
+    return res.sendStatus(200);
   }
 
   if (state.stage === 'choose_address') {
-    const choice = parseInt(msgBody);
+    const choice = parseInt(userInput);
 
     if (!isNaN(choice) && choice >= 1 && choice <= state.addresses.length) {
       const selectedAddress = state.addresses[choice - 1].address;
-      state.stage = 'done';
+      state.stage = 'payment_selection';
+      state.selectedAddress = selectedAddress;
       console.log(`POST /webhook: Selected address: ${selectedAddress} for ${from}`);
-      await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
-      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+      const orderSummary = `
+Order Summary:
+Selected Address: ${selectedAddress}
+Please select payment method:
+`;
+      await sendMessage(from, orderSummary, 'button', [      // Changed here
+        { id: 'cod', title: 'COD' },
+        { id: 'upi', title: 'UPI' },
+      ]);
+      return res.sendStatus(200);
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
@@ -235,10 +273,93 @@ app.post('/webhook', async (req, res) => {
     }
   }
 
+    if (userInput === 'cod' && state.stage === 'payment_selection') {
+    // COD
+    try {
+      const db = await connectToDatabase();
+      const ordersCollection = db.collection(ORDERS_COLLECTION);
+      const newOrder = {
+        waNumber: from,
+        orderItems: [
+          { name: "Sample Item 1", quantity: 2 },
+          { name: "Sample Item 2", quantity: 1 },
+        ],
+        total: 100,
+        status: 'confirmed',
+        paymentMethod: 'COD',
+        orderTime: new Date(),
+        orderNumber: `DM${Math.floor(Math.random() * 1000000)}`,
+        deliveryAddress: state.selectedAddress,
+      };
+      await ordersCollection.insertOne(newOrder);
+      await sendMessage(from, `✅ Your order is confirmed and will be delivered soon to ${state.selectedAddress}. Your Order Number is ${newOrder.orderNumber}. Payment Mode: COD`);
+      state.stage = 'done';
+      delete userState[from];
+      await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error("Error updating order status:", error);
+      await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
+      state.stage = 'done';
+       delete userState[from];
+      await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+      return res.sendStatus(200);
+    }
+  } else if (userInput === 'upi' && state.stage === 'payment_selection') {
+    // UPI
+    const qrCodeUrl = "https://via.placeholder.com/200x200?text=UPI+QR+Code";
+    await sendMessage(from, "Please scan this QR code to pay:", 'image');
+    await sendMessage(from, "Once payment is complete, send 'paid' to confirm.");
+    state.stage = 'awaiting_payment';
+    return res.sendStatus(200);
+  } else if (state.stage === 'payment_selection') {
+    await sendMessage(from, "Invalid payment option. Please select 1 for COD or 2 for UPI.", 'button', [
+      { id: 'cod', title: 'COD' },
+      { id: 'upi', title: 'UPI' },
+    ]);
+    return res.sendStatus(200);
+  }
+
+  if (state.stage === 'awaiting_payment') {
+    if (userInput === 'paid') {
+      const isPaymentSuccessful = await verifyPayment(state.orderNumber);
+      if (isPaymentSuccessful) {
+        try {
+          const db = await connectToDatabase();
+          const ordersCollection = db.collection(ORDERS_COLLECTION);
+          await ordersCollection.updateOne({ orderNumber: state.orderNumber }, { $set: { status: 'confirmed', paymentMethod: 'UPI' } });
+          await sendMessage(from, `✅ Payment confirmed! Your order is confirmed and will be delivered soon. Your Order Number is ${state.orderNumber}. Payment Mode: UPI`);
+          state.stage = 'done';
+          delete userState[from];
+          await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+          return res.sendStatus(200);
+        } catch (error) {
+          console.error("Error updating order status:", error);
+          await sendMessage(from, "❌ An error occurred while confirming your order. Please try again.");
+          state.stage = 'done';
+          delete userState[from];
+          await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
+          return res.sendStatus(200);
+        }
+      } else {
+        await sendMessage(from, "❌ Payment failed. Please try again.");
+        state.stage = 'payment_selection';
+         await sendMessage(from, "Please select payment method:", 'button', [      // Added buttons here
+          { id: 'cod', title: 'COD' },
+          { id: 'upi', title: 'UPI' },
+        ]);
+        return res.sendStatus(200);
+      }
+    } else {
+      await sendMessage(from, "Please send 'paid' after completing the payment.");
+      return res.sendStatus(200);
+    }
+  }
+
   if (state.stage === 'done') {
     console.log(`POST /webhook: stage is done.  ${from}`);
-     delete userState[from];
-    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+    delete userState[from];
+    await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
     return res.sendStatus(200);
   }
 
