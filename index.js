@@ -50,34 +50,47 @@ async function sendMessage(to, message, isInteractive = false, buttons = [], int
         type: interactiveType,
         body: {
           text: message
-        }
+        },
+        action: {} // Add an empty action object
       };
       if (interactiveType === 'button' && buttons.length > 0) {
-        messagePayload.interactive.action = {
-          buttons: buttons.map((btn, index) => ({
-            type: 'reply',
-            reply: {
-              id: `btn_${index}_${btn.id || index}`,
-              title: btn.title
-            }
-          }))
-        };
+        messagePayload.interactive.action.buttons = buttons.map((btn, index) => ({
+          type: 'reply',
+          reply: {
+            id: `btn_${index}_${btn.id || index}`,
+            title: btn.title
+          }
+        }));
       } else if (interactiveType === 'list') {
-        // List message structure remains the same
         messagePayload.interactive.action = {
           button: buttons.buttonText,
           sections: buttons.sections
         };
-      } else if (interactiveType === 'location_request') { // Changed to 'location_request'
-        messagePayload.interactive.action = {
-          buttons: [{
-            type: 'reply',
-            reply: {
-              id: 'share_location',
-              title: '📍 Share Location' // Changed button title
-            }
-          }]
-        };
+      } else if (interactiveType === 'location_request') {
+        messagePayload.type = 'text'; // change the type of the message.
+        messagePayload.text = {  // set the text.
+          body: message
+        }
+        delete messagePayload.interactive; // delete the interactive object
+        await axios.post(
+          `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+          {
+            messaging_product: 'whatsapp',
+            to: to,
+            type: "location",
+            location: {
+              latitude: 28.6139,
+              longitude: 77.2090,
+            },
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        return;
       }
     } else {
       messagePayload.text = { body: message };
@@ -174,7 +187,7 @@ app.post('/webhook', async (req, res) => {
     if (responseId === 'share_location' && state.stage === 'awaiting_location_button') {
       // User tapped the "Share Location" button
       state.stage = 'awaiting_location';
-      await sendMessage(from, "⏳ Please wait, fetching your location...", false); // Send a text message
+      await sendMessage(from, "⏳ Please wait, fetching your location...", false);
       return res.sendStatus(200);
     }
 
@@ -206,7 +219,7 @@ app.post('/webhook', async (req, res) => {
           '📍 To add a new address, please tap the button below to share your location:',
           true,
           [],
-          'location_request' // Changed to 'location_request'
+          'location_request'
         );
         return res.sendStatus(200);
       }
@@ -235,7 +248,7 @@ app.post('/webhook', async (req, res) => {
         "👋 Welcome to Daal Mail!\n\nPlease tap the button below to share your location:",
         true,
         [],
-        'location_request' // Changed to 'location_request'
+        'location_request'
       );
     } else {
       state.stage = 'menu';
@@ -311,7 +324,7 @@ app.post('/webhook', async (req, res) => {
         '📍 To add a new address, please tap the button below to share your location:',
         true,
         [],
-        'location_request' // Changed to 'location_request'
+        'location_request'
       );
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
@@ -346,7 +359,7 @@ app.post('/webhook', async (req, res) => {
         '📍 Please tap the button below to share your location:',
         true,
         [],
-        'location_request' // Changed to 'location_request'
+        'location_request'
       );
       return res.sendStatus(200);
     }
@@ -372,7 +385,7 @@ async function handlePlaceOrder(from, state, usersCollection) {
       '📍 No previous address found. Please tap the button below to share your location:',
       true,
       [],
-      'location_request' // Changed to 'location_request'
+      'location_request'
     );
     return;
   }
