@@ -203,28 +203,11 @@ app.post('/webhook', async (req, res) => {
         }
       } else if (responseId.includes('new_address')) {
         state.stage = 'collect_location';
-        await sendMessage(
-  from,
-  '📍 Tap the button below to share your current location:',
-  true,
-  [
-    {
-      title: '📍 Send Current Location',
-      id: 'send_location_btn'
-    }
-  ]
-);
-
+        await sendMessage(from, '📍 Please share your location:');
         return res.sendStatus(200);
       }
     }
     
-if (state.stage === 'collect_location' && responseId === 'send_location_btn') {
-  // Send native location request
-  await sendMessage(from, '📍 Please tap the attach icon (📎) and choose "Location" to send your current location.');
-  return res.sendStatus(200);
-}
-
     if (state.stage === 'track_order' && responseId.includes('order_')) {
       const index = parseInt(responseId.split('_')[1]);
       if (!isNaN(index) && state.orders && index >= 0 && index < state.orders.length) {
@@ -313,17 +296,7 @@ if (state.stage === 'collect_location' && responseId === 'send_location_btn') {
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'collect_location';
-      await sendMessage(
-  from,
-  '📍 Tap the button below to share your current location:',
-  true,
-  [
-    {
-      title: '📍 Send Current Location',
-      id: 'send_location_btn'
-    }
-  ]
-);
+      await sendMessage(from, '📍 Please share your location:');
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
     }
