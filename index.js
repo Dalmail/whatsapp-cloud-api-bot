@@ -67,30 +67,10 @@ async function sendMessage(to, message, isInteractive = false, buttons = [], int
           sections: buttons.sections
         };
       } else if (interactiveType === 'location_request') {
-        messagePayload.type = 'text'; // change the type of the message.
-        messagePayload.text = {  // set the text.
-          body: message
-        }
-        delete messagePayload.interactive; // delete the interactive object
-        await axios.post(
-          `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-          {
-            messaging_product: 'whatsapp',
-            to: to,
-            type: "location",
-            location: {
-              latitude: 28.6139,
-              longitude: 77.2090,
-            },
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
-        return;
+        messagePayload.interactive.type = 'request_location';  // Use request_location
+        messagePayload.interactive.action = {
+          text: message, // Include the message
+        };
       }
     } else {
       messagePayload.text = { body: message };
@@ -155,7 +135,7 @@ app.post('/webhook', async (req, res) => {
   const listId = listResponse?.id;
   const listTitle = listResponse?.title?.toLowerCase() || '';
 
-  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonId: ${buttonId}, buttonTitle: ${buttonTitle}, listId: ${listId}, listTitle: ${listTitle}, location: ${JSON.stringify(location)}`);
+  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonId: ${buttonId}, buttonTitle: ${buttonTitle}, listId: ${listId}, listTitle: ${JSON.stringify(location)}`);
 
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
@@ -187,7 +167,7 @@ app.post('/webhook', async (req, res) => {
     if (responseId === 'share_location' && state.stage === 'awaiting_location_button') {
       // User tapped the "Share Location" button
       state.stage = 'awaiting_location';
-      await sendMessage(from, "⏳ Please wait, fetching your location...", false);
+      await sendMessage(from, "⏳ Please wait, fetching your location...", false, [],  'text'); // Send a text message
       return res.sendStatus(200);
     }
 
@@ -317,6 +297,7 @@ app.post('/webhook', async (req, res) => {
       console.log(`Selected address: ${selectedAddress} for ${from}`);
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
+      return res.sendStatus(200);
     } else if (choice === state.addresses.length + 1) {
       state.stage = 'awaiting_location_button';
       await sendMessage(
@@ -326,10 +307,11 @@ app.post('/webhook', async (req, res) => {
         [],
         'location_request'
       );
+      return res.sendStatus(200);
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
+      return res.sendStatus(200);
     }
-    return res.sendStatus(200);
   }
 
   if (state.stage === 'collect_address') {
