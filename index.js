@@ -68,13 +68,13 @@ async function sendMessage(to, message, isInteractive = false, buttons = [], int
           button: buttons.buttonText,
           sections: buttons.sections
         };
-      } else if (interactiveType === 'location') {
+      } else if (interactiveType === 'location_request') { // Changed to 'location_request'
         messagePayload.interactive.action = {
           buttons: [{
             type: 'reply',
             reply: {
               id: 'share_location',
-              title: '📍 Share Current Location'
+              title: '📍 Share Location' // Changed button title
             }
           }]
         };
@@ -172,10 +172,9 @@ app.post('/webhook', async (req, res) => {
     console.log(`Interactive response: ${responseTitle} (${responseId}) from ${from}`);
 
     if (responseId === 'share_location' && state.stage === 'awaiting_location_button') {
-      // User tapped the "Share Current Location" button, no further action needed here
-      // The webhook will receive a separate location update
+      // User tapped the "Share Location" button
       state.stage = 'awaiting_location';
-      await sendMessage(from, "⏳ Please wait, fetching your current location...");
+      await sendMessage(from, "⏳ Please wait, fetching your location...", false); // Send a text message
       return res.sendStatus(200);
     }
 
@@ -204,10 +203,10 @@ app.post('/webhook', async (req, res) => {
         state.stage = 'awaiting_location_button';
         await sendMessage(
           from,
-          '📍 To add a new address, please tap the button below to share your current location:',
+          '📍 To add a new address, please tap the button below to share your location:',
           true,
           [],
-          'location'
+          'location_request' // Changed to 'location_request'
         );
         return res.sendStatus(200);
       }
@@ -233,10 +232,10 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'awaiting_location_button';
       await sendMessage(
         from,
-        "👋 Welcome to Daal Mail!\n\nPlease tap the button below to share your current location:",
+        "👋 Welcome to Daal Mail!\n\nPlease tap the button below to share your location:",
         true,
         [],
-        'location'
+        'location_request' // Changed to 'location_request'
       );
     } else {
       state.stage = 'menu';
@@ -309,10 +308,10 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'awaiting_location_button';
       await sendMessage(
         from,
-        '📍 To add a new address, please tap the button below to share your current location:',
+        '📍 To add a new address, please tap the button below to share your location:',
         true,
         [],
-        'location'
+        'location_request' // Changed to 'location_request'
       );
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
@@ -344,10 +343,10 @@ app.post('/webhook', async (req, res) => {
       state.stage = 'awaiting_location_button';
       await sendMessage(
         from,
-        '📍 Please tap the button below to share your current location:',
+        '📍 Please tap the button below to share your location:',
         true,
         [],
-        'location'
+        'location_request' // Changed to 'location_request'
       );
       return res.sendStatus(200);
     }
@@ -370,10 +369,10 @@ async function handlePlaceOrder(from, state, usersCollection) {
     state.stage = 'awaiting_location_button';
     await sendMessage(
       from,
-      '📍 No previous address found. Please tap the button below to share your current location:',
+      '📍 No previous address found. Please tap the button below to share your location:',
       true,
       [],
-      'location'
+      'location_request' // Changed to 'location_request'
     );
     return;
   }
