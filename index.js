@@ -35,46 +35,34 @@ const connectToDatabase = async () => {
   }
 };
 
-async function sendMessage(to, message, isInteractive = false, buttons = [], interactiveType = 'button') {
+async function sendMessage(to, message, isInteractive = false, buttons = []) {
   try {
-    console.log(`sendMessage: called with to: ${to}, message: ${message}, isInteractive: ${isInteractive}, interactiveType: ${interactiveType}`);
-
-    let messagePayload = {
+    console.log(`sendMessage: called with to: ${to}, message: ${message}, isInteractive: ${isInteractive}`);
+    
+    const messagePayload = isInteractive ? {
       messaging_product: 'whatsapp',
       to,
-      type: isInteractive ? 'interactive' : 'text',
-    };
-
-    if (isInteractive) {
-      messagePayload.interactive = {
-        type: interactiveType,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
         body: {
           text: message
         },
-        action: {} // Add an empty action object
-      };
-      if (interactiveType === 'button' && buttons.length > 0) {
-        messagePayload.interactive.action.buttons = buttons.map((btn, index) => ({
-          type: 'reply',
-          reply: {
-            id: `btn_${index}_${btn.id || index}`,
-            title: btn.title
-          }
-        }));
-      } else if (interactiveType === 'list') {
-        messagePayload.interactive.action = {
-          button: buttons.buttonText,
-          sections: buttons.sections
-        };
-      } else if (interactiveType === 'location_request') {
-        messagePayload.interactive.type = 'request_location';  // Use request_location
-        messagePayload.interactive.action = {
-          text: message, // Include the message
-        };
+        action: {
+          buttons: buttons.map((btn, index) => ({
+            type: 'reply',
+            reply: {
+              id: `btn_${index}_${btn.id || index}`,
+              title: btn.title
+            }
+          }))
+        }
       }
-    } else {
-      messagePayload.text = { body: message };
-    }
+    } : {
+      messaging_product: 'whatsapp',
+      to,
+      text: { body: message },
+    };
 
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
@@ -94,7 +82,44 @@ async function sendMessage(to, message, isInteractive = false, buttons = [], int
 }
 
 async function sendListMessage(to, headerText, bodyText, buttonText, sections) {
-  return sendMessage(to, bodyText, true, { buttonText, sections }, 'list');
+  try {
+    console.log(`sendListMessage: called with to: ${to}`);
+    
+    const messagePayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        header: {
+          type: 'text',
+          text: headerText
+        },
+        body: {
+          text: bodyText
+        },
+        action: {
+          button: buttonText,
+          sections
+        }
+      }
+    };
+
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      messagePayload,
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    console.log('sendListMessage: successful');
+  } catch (err) {
+    console.error('sendListMessage: Error sending message:', err.response?.data || err.message);
+    throw err; // Propagate the error
+  }
 }
 
 app.get('/webhook', (req, res) => {
@@ -123,20 +148,20 @@ app.post('/webhook', async (req, res) => {
   const buttonResponse = message?.interactive?.button_reply;
   const listResponse = message?.interactive?.list_reply;
 
-  if (!message && !buttonResponse && !listResponse && !location) {
-    console.log("POST /webhook: No relevant message or interactive response found in payload");
+  if (!message && !buttonResponse && !listResponse) {
+    console.log("POST /webhook: No message or interactive response found in payload");
     return res.sendStatus(200);
   }
 
-  const from = message?.from || buttonResponse?.from || listResponse?.from || location?.from;
+  const from = message?.from || buttonResponse?.from || listResponse?.from;
   const msgBody = message?.text?.body?.trim().toLowerCase() || '';
   const buttonId = buttonResponse?.id;
   const buttonTitle = buttonResponse?.title?.toLowerCase() || '';
   const listId = listResponse?.id;
   const listTitle = listResponse?.title?.toLowerCase() || '';
-
-  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonId: ${buttonId}, buttonTitle: ${buttonTitle}, listId: ${listId}, listTitle: ${JSON.stringify(location)}`);
-
+  
+  console.log(`POST /webhook: from: ${from}, msgBody: ${msgBody}, buttonId: ${buttonId}, buttonTitle: ${buttonTitle}, listId: ${listId}, listTitle: ${listTitle}, location: ${JSON.stringify(location)}`);
+  
   const db = await connectToDatabase();
   const usersCollection = db.collection(USERS_COLLECTION);
   const ordersCollection = db.collection(ORDERS_COLLECTION);
@@ -148,29 +173,13 @@ app.post('/webhook', async (req, res) => {
   const state = userState[from];
   console.log(`POST /webhook: User state for ${from}:`, state);
 
-  // Handle location sharing
-  if (location && state.stage === 'awaiting_location') {
-    state.userLocation = location;
-    state.stage = 'collect_address';
-    await sendMessage(from, "📍 Thank you for sharing your location. Now, please enter your address:");
-    console.log(`Location received: ${JSON.stringify(location)}`);
-    return res.sendStatus(200);
-  }
-
   // Handle interactive responses first
   if (buttonResponse || listResponse) {
     const responseId = buttonId || listId;
     const responseTitle = buttonTitle || listTitle;
-
+    
     console.log(`Interactive response: ${responseTitle} (${responseId}) from ${from}`);
-
-    if (responseId === 'share_location' && state.stage === 'awaiting_location_button') {
-      // User tapped the "Share Location" button
-      state.stage = 'awaiting_location';
-      await sendMessage(from, "⏳ Please wait, fetching your location...", false, [],  'text'); // Send a text message
-      return res.sendStatus(200);
-    }
-
+    
     if (state.stage === 'menu') {
       if (responseTitle.includes('place an order') || responseId.includes('place_order')) {
         await handlePlaceOrder(from, state, usersCollection);
@@ -180,7 +189,7 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
     }
-
+    
     if (state.stage === 'choose_address') {
       if (responseId.includes('address_')) {
         const index = parseInt(responseId.split('_')[1]);
@@ -193,17 +202,28 @@ app.post('/webhook', async (req, res) => {
           return res.sendStatus(200);
         }
       } else if (responseId.includes('new_address')) {
-        state.stage = 'awaiting_location_button';
+        state.stage = 'collect_location';
         await sendMessage(
-          from,
-          '📍 To add a new address, please tap the button below to share your location:',
-          true,
-          [],
-          'location_request'
-        );
+  from,
+  '📍 Tap the button below to share your current location:',
+  true,
+  [
+    {
+      title: '📍 Send Current Location',
+      id: 'send_location_btn'
+    }
+  ]
+);
+
         return res.sendStatus(200);
       }
     }
+    
+if (state.stage === 'collect_location' && responseId === 'send_location_btn') {
+  // Send native location request
+  await sendMessage(from, '📍 Please tap the attach icon (📎) and choose "Location" to send your current location.');
+  return res.sendStatus(200);
+}
 
     if (state.stage === 'track_order' && responseId.includes('order_')) {
       const index = parseInt(responseId.split('_')[1]);
@@ -222,20 +242,14 @@ app.post('/webhook', async (req, res) => {
   if (msgBody === 'hello' || msgBody === 'hi' || state.stage === 'start') {
     const existingUser = await usersCollection.findOne({ waNumber: from });
     if (!existingUser) {
-      state.stage = 'awaiting_location_button';
-      await sendMessage(
-        from,
-        "👋 Welcome to Daal Mail!\n\nPlease tap the button below to share your location:",
-        true,
-        [],
-        'location_request'
-      );
+      state.stage = 'collect_location';
+      await sendMessage(from, "👋 Welcome to Daal Mail!\n\nPlease share your location to continue with your order.");
     } else {
       state.stage = 'menu';
       await sendMessage(
-        from,
-        '👋 Welcome back to Daal Mail!\n\nPlease choose an option:',
-        true,
+        from, 
+        '👋 Welcome back to Daal Mail!\n\nPlease choose an option:', 
+        true, 
         [
           { title: 'Place an order', id: 'place_order' },
           { title: 'Track your order', id: 'track_order' }
@@ -297,21 +311,23 @@ app.post('/webhook', async (req, res) => {
       console.log(`Selected address: ${selectedAddress} for ${from}`);
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
       await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-      return res.sendStatus(200);
     } else if (choice === state.addresses.length + 1) {
-      state.stage = 'awaiting_location_button';
+      state.stage = 'collect_location';
       await sendMessage(
-        from,
-        '📍 To add a new address, please tap the button below to share your location:',
-        true,
-        [],
-        'location_request'
-      );
-      return res.sendStatus(200);
+  from,
+  '📍 Tap the button below to share your current location:',
+  true,
+  [
+    {
+      title: '📍 Send Current Location',
+      id: 'send_location_btn'
+    }
+  ]
+);
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
-      return res.sendStatus(200);
     }
+    return res.sendStatus(200);
   }
 
   if (state.stage === 'collect_address') {
@@ -335,14 +351,7 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     } else {
       await sendMessage(from, "❌ Location is required. Please share your location and address again.");
-      state.stage = 'awaiting_location_button';
-      await sendMessage(
-        from,
-        '📍 Please tap the button below to share your location:',
-        true,
-        [],
-        'location_request'
-      );
+      state.stage = 'collect_location';
       return res.sendStatus(200);
     }
   }
@@ -361,37 +370,31 @@ app.post('/webhook', async (req, res) => {
 async function handlePlaceOrder(from, state, usersCollection) {
   const existingUser = await usersCollection.findOne({ waNumber: from });
   if (!existingUser || !Array.isArray(existingUser.previousAddresses) || existingUser.previousAddresses.length === 0) {
-    state.stage = 'awaiting_location_button';
-    await sendMessage(
-      from,
-      '📍 No previous address found. Please tap the button below to share your location:',
-      true,
-      [],
-      'location_request'
-    );
+    state.stage = 'collect_location';
+    await sendMessage(from, '📍 No previous address found. Please share your location to continue with your order:');
     return;
   }
 
   const addresses = existingUser.previousAddresses;
-
+  
   // Store addresses in state
   state.stage = 'choose_address';
   state.addresses = addresses;
-
+  
   if (addresses.length <= 2) {
     // Use buttons only if we have 2 or fewer addresses (saving 1 button for "Add new address")
     let msg = '📍 We found your previous addresses:\n\n';
     addresses.forEach((item, index) => {
       msg += `${index + 1}. ${item.address}\n`;
     });
-
+    
     const buttons = addresses.map((item, index) => ({
       title: `Address ${index + 1}`,
       id: `address_${index}`
     }));
-
+    
     buttons.push({ title: '➕ Add new address', id: 'new_address' });
-
+    
     await sendMessage(from, msg, true, buttons);
   } else {
     // Use a simple numbered list for 3+ addresses
@@ -400,7 +403,7 @@ async function handlePlaceOrder(from, state, usersCollection) {
       msg += `${index + 1}. ${item.address}\n`;
     });
     msg += `\n${addresses.length + 1}. Add new address`;
-
+    
     await sendMessage(from, msg, false);
   }
 }
@@ -419,12 +422,12 @@ async function handleTrackOrder(from, state, ordersCollection) {
         title: `Order ${index + 1}`,
         id: `order_${index}`
       }));
-
+      
       let orderListMessage = "📦 Your Previous Orders:\n";
       userOrders.forEach((order, index) => {
         orderListMessage += `${index + 1}. Order Number: ${order.orderNumber}\n`;
       });
-
+      
       await sendMessage(
         from,
         orderListMessage + "\nPlease select an order to track:",
