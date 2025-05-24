@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; // Your bot's WhatsApp Phone Number ID
 const MONGODB_URI = process.env.MONGODB_URI;
 
 const DB_NAME = 'daalMail';
@@ -35,12 +35,12 @@ const connectToDatabase = async () => {
   }
 };
 
-// --- NEW/MODIFIED: Functions to handle user state persistence ---
+// --- MODIFIED: Functions to handle user state persistence ---
 async function getUserStateFromDb(db, waNumber) {
     const usersCollection = db.collection(USERS_COLLECTION);
     const user = await usersCollection.findOne({ waNumber: waNumber });
-    // Return the 'state' field if it exists, otherwise a default 'start' state
-    return user ? user.state : { stage: 'start', addresses: [] };
+    // Ensure that if user is not found, or user.state is null/undefined, we return a valid initial state object
+    return (user && user.state) ? user.state : { stage: 'start', addresses: [] };
 }
 
 async function saveUserStateToDb(db, waNumber, state) {
@@ -51,7 +51,7 @@ async function saveUserStateToDb(db, waNumber, state) {
         { upsert: true } // Create the document if it doesn't exist
     );
 }
-// --- END NEW/MODIFIED ---
+// --- END MODIFIED ---
 
 
 async function sendMessage(to, message, isInteractive = false, buttons = []) {
@@ -156,8 +156,6 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// REMOVED: const userState = {}; - No longer needed as state is in DB
-
 app.post('/webhook', async (req, res) => {
   console.log("POST /webhook: Received webhook event");
   const entry = req.body.entry?.[0];
@@ -185,10 +183,14 @@ app.post('/webhook', async (req, res) => {
   const usersCollection = db.collection(USERS_COLLECTION);
   const ordersCollection = db.collection(ORDERS_COLLECTION);
 
-  // --- NEW: Load user state from DB ---
   let state = await getUserStateFromDb(db, from);
-  console.log(`POST /webhook: User state for ${from}:`, state);
-  // --- END NEW ---
+
+  // *** CRUCIAL FIX: Ensure state is always an object, even if getUserStateFromDb returns undefined/null ***
+  if (!state || typeof state !== 'object') {
+    console.warn(`POST /webhook: Initial state for ${from} was invalid or missing. Resetting to default.`);
+    state = { stage: 'start', addresses: [] };
+  }
+  console.log(`POST /webhook: User state for ${from} (after check):`, state);
 
   // Handle interactive responses first
   if (buttonResponse || listResponse) {
@@ -200,11 +202,11 @@ app.post('/webhook', async (req, res) => {
     if (state.stage === 'menu') {
       if (responseTitle.includes('place an order') || responseId.includes('place_order')) {
         await handlePlaceOrder(from, state, usersCollection);
-        await saveUserStateToDb(db, from, state); // Save state after handling
+        await saveUserStateToDb(db, from, state); 
         return res.sendStatus(200);
       } else if (responseTitle.includes('track your order') || responseId.includes('track_order')) {
         await handleTrackOrder(from, state, ordersCollection);
-        await saveUserStateToDb(db, from, state); // Save state after handling
+        await saveUserStateToDb(db, from, state); 
         return res.sendStatus(200);
       }
     }
@@ -214,17 +216,18 @@ app.post('/webhook', async (req, res) => {
         const index = parseInt(responseId.split('_')[1]);
         if (!isNaN(index) && state.addresses && index >= 0 && index < state.addresses.length) {
           const selectedAddress = state.addresses[index].address;
-          state.stage = 'done'; // Set stage to done or to menu directly
+          state.stage = 'done'; 
           console.log(`Selected address: ${selectedAddress} for ${from}`);
           await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
-          await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-          await saveUserStateToDb(db, from, state); // Save state after address selection
+          // MODIFIED: Pass botNumber to frontend
+          await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}&botNumber=${PHONE_NUMBER_ID}`);
+          await saveUserStateToDb(db, from, state); 
           return res.sendStatus(200);
         }
       } else if (responseId.includes('new_address')) {
         state.stage = 'collect_location';
         await sendMessage(from, '📍 Please share your location:');
-        await saveUserStateToDb(db, from, state); // Save state after changing stage
+        await saveUserStateToDb(db, from, state); 
         return res.sendStatus(200);
       }
     }
@@ -234,22 +237,20 @@ app.post('/webhook', async (req, res) => {
       if (!isNaN(index) && state.orders && index >= 0 && index < state.orders.length) {
         const selectedOrder = state.orders[index];
         await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
-        state.stage = 'done';
-        // delete userState[from]; // No longer delete from in-memory, just reset stage
-        await saveUserStateToDb(db, from, { stage: 'start', addresses: [] }); // Reset user state in DB
+        state.stage = 'start'; // Reset to start after tracking
+        await saveUserStateToDb(db, from, state); // Save reset state
         await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
         return res.sendStatus(200);
       }
     }
   }
 
-  // Handle text messages (fallback)
-  if (msgBody === 'hello' || msgBody === 'hi' || state.stage === 'start') {
-    const existingUser = await usersCollection.findOne({ waNumber: from });
-    if (!existingUser || !existingUser.state || existingUser.state.stage === 'start') { // Also check for existing state
+  // Handle text messages
+  if (msgBody === 'hello' || msgBody === 'hi') { 
+    if (state.stage === 'start') { // If user is new or truly at start
       state.stage = 'collect_location';
       await sendMessage(from, "👋 Welcome to Daal Mail!\n\nPlease share your location to continue with your order.");
-    } else {
+    } else { // Returning user, send to main menu
       state.stage = 'menu';
       await sendMessage(
         from, 
@@ -261,11 +262,10 @@ app.post('/webhook', async (req, res) => {
         ]
       );
     }
-    await saveUserStateToDb(db, from, state); // Save state after handling hi/hello
+    await saveUserStateToDb(db, from, state); 
     return res.sendStatus(200);
-  } else if (state.stage === 'start') {
+  } else if (state.stage === 'start') { // If not 'hi'/'hello' but still in 'start' state
     await sendMessage(from, "Please send 'hi' or 'hello' to start.");
-    // No state change, so no save needed here unless you want to persist the 'start' state explicitly for new users
     return res.sendStatus(200);
   }
 
@@ -278,20 +278,23 @@ app.post('/webhook', async (req, res) => {
     } else {
       await sendMessage(from, "❌ Location is required. Please share your location to proceed.");
     }
-    await saveUserStateToDb(db, from, state); // Save state after handling location
+    await saveUserStateToDb(db, from, state); 
     return res.sendStatus(200);
   }
 
-  if (msgBody === '1' && state.stage === 'menu') {
+  // Handle direct text inputs for menu/track (if not using interactive buttons)
+  if ((msgBody === '1' || msgBody.includes('place')) && state.stage === 'menu') {
     await handlePlaceOrder(from, state, usersCollection);
-    await saveUserStateToDb(db, from, state); // Save state after handling place order
+    await saveUserStateToDb(db, from, state); 
     return res.sendStatus(200);
-  } else if (msgBody === '2' && state.stage === 'menu') {
+  } else if ((msgBody === '2' || msgBody.includes('track')) && state.stage === 'menu') {
     await handleTrackOrder(from, state, ordersCollection);
-    await saveUserStateToDb(db, from, state); // Save state after handling track order
+    await saveUserStateToDb(db, from, state); 
     return res.sendStatus(200);
   } else if (state.stage === 'menu') {
-    await sendMessage(from, "Invalid option. Please choose 1 or 2.");
+    // This else if is only needed if you expect text replies "1" or "2" for menu
+    // With interactive buttons, this branch might not be hit often
+    await sendMessage(from, "Invalid option. Please choose 'Place an order' or 'Track your order'.");
     return res.sendStatus(200);
   }
 
@@ -300,9 +303,8 @@ app.post('/webhook', async (req, res) => {
     if (!isNaN(orderNumberChoice) && orderNumberChoice > 0 && orderNumberChoice <= state.orders.length) {
       const selectedOrder = state.orders[orderNumberChoice - 1];
       await sendMessage(from, `📦 Order Status: ${selectedOrder.status}\nOrder Number: ${selectedOrder.orderNumber}\nOrder Time: ${selectedOrder.orderTime}`);
-      state.stage = 'done';
-      // delete userState[from]; // No longer delete from in-memory
-      await saveUserStateToDb(db, from, { stage: 'start', addresses: [] }); // Reset user state in DB
+      state.stage = 'start'; // Reset to start after tracking
+      await saveUserStateToDb(db, from, state); 
       await sendMessage(from, "Please send 'hi' or 'hello' to restart.");
       return res.sendStatus(200);
     } else {
@@ -318,15 +320,16 @@ app.post('/webhook', async (req, res) => {
     const choice = parseInt(msgBody);
     if (!isNaN(choice) && choice >= 1 && choice <= state.addresses.length) {
       const selectedAddress = state.addresses[choice - 1].address;
-      state.stage = 'done'; // Set to done or menu, depending on desired next step
+      state.stage = 'done'; 
       console.log(`Selected address: ${selectedAddress} for ${from}`);
       await sendMessage(from, `✅ Using your address: ${selectedAddress}`);
-      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-      await saveUserStateToDb(db, from, state); // Save state after address selection
-    } else if (choice === state.addresses.length + 1) {
+      // MODIFIED: Pass botNumber to frontend
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}&botNumber=${PHONE_NUMBER_ID}`);
+      await saveUserStateToDb(db, from, state); 
+    } else if (choice === state.addresses.length + 1) { // Assuming "Add new address" is always the last option + 1
       state.stage = 'collect_location';
       await sendMessage(from, '📍 Please share your location:');
-      await saveUserStateToDb(db, from, state); // Save state after changing stage
+      await saveUserStateToDb(db, from, state); 
     } else {
       await sendMessage(from, '❌ Invalid option. Please reply with a valid number from the list above.');
     }
@@ -336,63 +339,50 @@ app.post('/webhook', async (req, res) => {
   if (state.stage === 'collect_address') {
     const address = msgBody;
     if (state.userLocation) {
-      const existingUserDoc = await usersCollection.findOne({ waNumber: from }); // Fetch full user document
       const newEntry = { address, location: state.userLocation, timestamp: new Date() };
       
-      // Update the user's previousAddresses within the existing document
-      if (existingUserDoc) {
-        await usersCollection.updateOne(
+      // Update the user's state.addresses directly
+      state.addresses.push(newEntry);
+      state.stage = 'done'; // Transition to 'done' after collecting address
+      
+      // Also update the database. We need to fetch current previousAddresses to append
+      const existingUserDoc = await usersCollection.findOne({ waNumber: from });
+      let previousAddresses = existingUserDoc?.previousAddresses || [];
+      previousAddresses.push(newEntry); // Add to previousAddresses array
+      
+      await usersCollection.updateOne(
           { waNumber: from },
           { 
               $set: { 
                   'state.userLocation': state.userLocation, // Update location in state
-                  'state.addresses': [...(existingUserDoc.state.addresses || []), newEntry], // Add new address to state.addresses
-                  'state.stage': 'done', // Update stage
+                  'state.addresses': state.addresses, // Set the updated addresses array in state
+                  'state.stage': state.stage, // Set the updated stage
+                  previousAddresses: previousAddresses, // Update the top-level previousAddresses
                   lastUpdated: new Date() 
-              },
-              $push: { previousAddresses: newEntry } // Also push to previousAddresses array at top level if desired
-          }
-        );
-        // Ensure state object reflects the update for immediate use
-        state.addresses = [...(existingUserDoc.state.addresses || []), newEntry];
-        state.stage = 'done';
-
-      } else {
-        // This case should ideally be handled by initial 'hi'/'hello' flow, but as a fallback:
-        const newUser = {
-          waNumber: from,
-          state: {
-            stage: 'done',
-            userLocation: state.userLocation,
-            addresses: [newEntry]
+              }
           },
-          previousAddresses: [newEntry], // Store also at top level
-          lastUpdated: new Date()
-        };
-        await usersCollection.insertOne(newUser);
-        state.addresses = [newEntry];
-        state.stage = 'done';
-      }
+          { upsert: true }
+      );
 
       console.log(`New address saved: ${address} for ${from}`);
       await sendMessage(from, `✅ Address saved: ${address}`);
-      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-      await saveUserStateToDb(db, from, state); // Save final state after address collection
+      // MODIFIED: Pass botNumber to frontend
+      await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}&botNumber=${PHONE_NUMBER_ID}`);
+      // No need to save state again, it's already updated and saved in the updateOne call above
       return res.sendStatus(200);
     } else {
       await sendMessage(from, "❌ Location is required. Please share your location and address again.");
       state.stage = 'collect_location';
-      await saveUserStateToDb(db, from, state); // Save state after prompting for location again
+      await saveUserStateToDb(db, from, state); 
       return res.sendStatus(200);
     }
   }
 
   if (state.stage === 'done') {
     console.log(`Conversation completed for ${from}, sending menu link.`);
-    // A user in 'done' stage is usually ready to order, so send menu link directly.
-    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}`);
-    // No need to reset stage to 'start' here, they can directly use the link.
-    // If you want them to restart bot flow, change state.stage = 'start';
+    // MODIFIED: Pass botNumber to frontend
+    await sendMessage(from, `${NETLIFY_MENU_LINK}?waNumber=${from}&botNumber=${PHONE_NUMBER_ID}`);
+    // Keep stage as 'done' so they can directly use the link.
     return res.sendStatus(200);
   }
 
@@ -404,8 +394,10 @@ async function handlePlaceOrder(from, state, usersCollection) {
   const existingUser = await usersCollection.findOne({ waNumber: from });
   
   // Ensure state.addresses and previousAddresses are populated correctly from DB.
-  // We'll prioritize the state.addresses from the database if available, otherwise fallback.
-  let currentAddresses = existingUser?.state?.addresses || existingUser?.previousAddresses || [];
+  let currentAddresses = existingUser?.state?.addresses || []; // Prefer state.addresses
+  if (currentAddresses.length === 0 && existingUser?.previousAddresses) {
+      currentAddresses = existingUser.previousAddresses; // Fallback to previousAddresses if state.addresses is empty
+  }
   
   if (!Array.isArray(currentAddresses) || currentAddresses.length === 0) {
     state.stage = 'collect_location';
@@ -414,30 +406,38 @@ async function handlePlaceOrder(from, state, usersCollection) {
   }
 
   state.stage = 'choose_address';
-  state.addresses = currentAddresses; // Use the fetched addresses
+  state.addresses = currentAddresses; // Store fetched addresses in current state
 
-  if (currentAddresses.length <= 2) {
+  if (currentAddresses.length <= 2) { // WhatsApp allows up to 3 buttons
     let msg = '📍 We found your previous addresses:\n\n';
-    currentAddresses.forEach((item, index) => {
-      msg += `${index + 1}. ${item.address}\n`;
-    });
-    
     const buttons = currentAddresses.map((item, index) => ({
-      title: `Address ${index + 1}`,
+      title: `${item.address.substring(0,20)}...`, // Truncate long addresses for button title
       id: `address_${index}`
     }));
     
     buttons.push({ title: '➕ Add new address', id: 'new_address' });
     
-    await sendMessage(from, msg, true, buttons);
+    await sendMessage(from, msg + "\nPlease select an address or add a new one:", true, buttons);
   } else {
-    let msg = '📍 We found your previous addresses:\n\n';
-    currentAddresses.forEach((item, index) => {
-      msg += `${index + 1}. ${item.address}\n`;
+    // Use list message for more than 3 addresses or simple text list
+    let sections = [{
+        title: "Your Saved Addresses",
+        rows: currentAddresses.map((item, index) => ({
+            id: `address_${index}`,
+            title: item.address.substring(0, 24), // Truncate title
+            description: `Address ${index + 1}` // Optional description
+        }))
+    }];
+    sections.push({
+        title: "Other Options",
+        rows: [{
+            id: 'new_address',
+            title: '➕ Add new address',
+            description: 'Provide a new location and address'
+        }]
     });
-    msg += `\n${currentAddresses.length + 1}. Add new address`;
-    
-    await sendMessage(from, msg, false);
+
+    await sendListMessage(from, "📍 Please select an address:", "Choose from your saved addresses or add a new one.", "Select Address", sections);
   }
 }
 
@@ -452,7 +452,7 @@ async function handleTrackOrder(from, state, ordersCollection) {
     if (userOrders.length <= 3) {
       // Use buttons for 3 or fewer orders
       const buttons = userOrders.map((order, index) => ({
-        title: `Order ${index + 1}`,
+        title: `Order ${index + 1} (${order.orderNumber})`,
         id: `order_${index}`
       }));
       
@@ -468,22 +468,26 @@ async function handleTrackOrder(from, state, ordersCollection) {
         buttons
       );
     } else {
-      // Use text list for more than 3 orders
-      let orderListMessage = "📦 Your Previous Orders:\n";
-      userOrders.forEach((order, index) => {
-        orderListMessage += `${index + 1}. Order Number: ${order.orderNumber}\n`;
-      });
-      orderListMessage += "\nPlease reply with the number of the order you want to track:";
-      await sendMessage(from, orderListMessage);
+      // Use list message for more than 3 orders
+      let sections = [{
+        title: "Your Previous Orders",
+        rows: userOrders.map((order, index) => ({
+          id: `order_${index}`,
+          title: `Order ${index + 1} (${order.orderNumber})`,
+          description: `Total: ₹${order.total} | Status: ${order.status}`
+        }))
+      }];
+
+      await sendListMessage(from, "📦 Track Your Order", "Select an order from the list below to see its status.", "Track Order", sections);
     }
     state.orders = userOrders; // Store fetched orders in state for later lookup
   } else {
     await sendMessage(from, "❌ No previous orders found.");
-    state.stage = 'done'; // Set stage to done as there are no orders to track
+    state.stage = 'start'; // Reset stage to start as there are no orders to track
   }
 }
 
-// Order creation endpoint (from your HTML, likely your /create-order or /processOrder)
+// Order creation endpoint
 app.post('/create-order', async (req, res) => {
   console.log("POST /create-order: Entered /create-order route");
   try {
@@ -506,11 +510,10 @@ app.post('/create-order', async (req, res) => {
       return res.status(400).json({ error: 'WhatsApp number not found. Please go back to WhatsApp and try again.' });
     }
 
-    // You might want to get the latest confirmed address from user.state.addresses
-    // or from previousAddresses array if you decided to store selected address there
-    let deliveryAddress = "Not specified"; // Default
+    let deliveryAddress = "Not specified"; 
+    // Prefer state.addresses if available, then previousAddresses
     if (user.state && user.state.addresses && user.state.addresses.length > 0) {
-      deliveryAddress = user.state.addresses[user.state.addresses.length - 1].address; // Use the last added/confirmed address
+      deliveryAddress = user.state.addresses[user.state.addresses.length - 1].address; 
     } else if (user.previousAddresses && user.previousAddresses.length > 0) {
       deliveryAddress = user.previousAddresses[user.previousAddresses.length - 1].address;
     }
@@ -520,8 +523,8 @@ app.post('/create-order', async (req, res) => {
       waNumber,
       orderItems,
       total,
-      deliveryAddress, // Include delivery address
-      status: 'Pending', // Initial status
+      deliveryAddress, 
+      status: 'Pending', 
       orderTime: new Date(),
       orderNumber: `DM${Math.floor(Math.random() * 1000000)}`,
     };
@@ -530,6 +533,7 @@ app.post('/create-order', async (req, res) => {
     console.log("POST /create-order: Order saved to database:", result);
 
     // Optionally update user state to 'done' or 'menu' after order is placed
+    // Keep user state in 'done' or 'menu' after order so they can continue using the menu
     await saveUserStateToDb(db, waNumber, { stage: 'done', addresses: user.state.addresses || [] });
 
 
